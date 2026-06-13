@@ -1,8 +1,9 @@
 import {
   LANE_COUNT,
-  createInitialState,
   moveLane,
-  tickFoundation
+  PLAYER_Y,
+  resetState,
+  tickGame
 } from "./state.js";
 
 const canvas = document.querySelector("#game");
@@ -13,7 +14,7 @@ const restartButton = document.querySelector("#restart");
 const leftButton = document.querySelector("#left");
 const rightButton = document.querySelector("#right");
 
-let state = createInitialState();
+let state = resetState();
 let lastFrame = performance.now();
 let touchStartX = null;
 
@@ -24,7 +25,10 @@ function laneCenter(lane) {
 function render() {
   context.clearRect(0, 0, canvas.width, canvas.height);
   drawTrack();
+  drawEnemies();
+  drawBullets();
   drawSquad();
+  drawOverlay();
   updateHud();
 }
 
@@ -57,7 +61,7 @@ function drawTrack() {
 
 function drawSquad() {
   const centerX = laneCenter(state.lane);
-  const baseY = canvas.height - 92;
+  const baseY = canvas.height * PLAYER_Y;
   const visibleMembers = Math.min(state.squadSize, 15);
   const columns = 5;
 
@@ -83,18 +87,71 @@ function drawSquad() {
   context.fillText(String(state.squadSize), centerX, baseY + 36);
 }
 
+function drawBullets() {
+  context.fillStyle = "#fef08a";
+
+  for (const bullet of state.bullets) {
+    const x = laneCenter(bullet.lane);
+    const y = bullet.y * canvas.height;
+    context.beginPath();
+    context.roundRect(x - 5, y - 15, 10, 22, 5);
+    context.fill();
+  }
+}
+
+function drawEnemies() {
+  for (const enemy of state.enemies) {
+    const x = laneCenter(enemy.lane);
+    const y = enemy.y * canvas.height;
+    const healthRatio = Math.max(0, enemy.health / enemy.maxHealth);
+
+    context.fillStyle = "#fb7185";
+    context.strokeStyle = "#4c0519";
+    context.lineWidth = 3;
+    context.beginPath();
+    context.roundRect(x - 24, y - 24, 48, 48, 10);
+    context.fill();
+    context.stroke();
+
+    context.fillStyle = "#0f172a";
+    context.fillRect(x - 22, y - 34, 44, 6);
+    context.fillStyle = "#22c55e";
+    context.fillRect(x - 22, y - 34, 44 * healthRatio, 6);
+  }
+}
+
+function drawOverlay() {
+  if (state.status !== "game-over") {
+    return;
+  }
+
+  context.fillStyle = "rgba(2, 6, 23, 0.72)";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = "#f8fafc";
+  context.font = "800 38px system-ui, sans-serif";
+  context.textAlign = "center";
+  context.fillText("Game Over", canvas.width / 2, canvas.height / 2 - 12);
+  context.font = "700 18px system-ui, sans-serif";
+  context.fillText("Press Restart", canvas.width / 2, canvas.height / 2 + 26);
+}
+
 function updateHud() {
   scoreElement.textContent = String(state.score);
   squadElement.textContent = String(state.squadSize);
+  restartButton.textContent = state.status === "game-over" ? "Try Again" : "Restart";
 }
 
 function resetRun() {
-  state = createInitialState();
+  state = resetState();
   lastFrame = performance.now();
   render();
 }
 
 function move(direction) {
+  if (state.status !== "running") {
+    return;
+  }
+
   state = moveLane(state, direction);
   render();
 }
@@ -102,7 +159,7 @@ function move(direction) {
 function frame(now) {
   const deltaSeconds = Math.min((now - lastFrame) / 1000, 0.05);
   lastFrame = now;
-  state = tickFoundation(state, deltaSeconds);
+  state = tickGame(state, deltaSeconds);
   render();
   requestAnimationFrame(frame);
 }
