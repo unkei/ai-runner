@@ -9,6 +9,10 @@ export const ENEMY_BASE_SPEED = 0.18;
 export const FIRE_INTERVAL_SECONDS = 0.36;
 export const ENEMY_SPAWN_INTERVAL_SECONDS = 1.05;
 export const HIT_RADIUS = 0.045;
+export const GATE_SPAWN_INTERVAL_SECONDS = 3.1;
+export const PICKUP_SPAWN_INTERVAL_SECONDS = 2.4;
+export const ITEM_SPEED = 0.24;
+export const ITEM_COLLECT_RADIUS = 0.055;
 
 export function clamp(value, min, max) {
   const numericValue = Number(value);
@@ -32,8 +36,12 @@ export function createInitialState() {
     nextId: 1,
     fireCooldown: FIRE_INTERVAL_SECONDS,
     enemySpawnCooldown: 0.65,
+    gateSpawnCooldown: 1.6,
+    pickupSpawnCooldown: 2.1,
     bullets: [],
-    enemies: []
+    enemies: [],
+    gates: [],
+    pickups: []
   };
 }
 
@@ -94,6 +102,27 @@ export function createEnemy(state, lane = 0) {
   };
 }
 
+export function createGate(state, lane = 0, operation = "+", value = 3) {
+  return {
+    id: state.nextId,
+    lane: clamp(lane, 0, LANE_COUNT - 1),
+    y: -0.08,
+    operation,
+    value: Math.max(1, Math.trunc(Number(value)) || 1),
+    speed: ITEM_SPEED
+  };
+}
+
+export function createPickup(state, lane = 0, value = 2) {
+  return {
+    id: state.nextId,
+    lane: clamp(lane, 0, LANE_COUNT - 1),
+    y: -0.08,
+    value: Math.max(1, Math.trunc(Number(value)) || 1),
+    speed: ITEM_SPEED * 1.08
+  };
+}
+
 export function spawnBullet(state) {
   if (state.status !== "running" || state.squadSize <= 0) {
     return state;
@@ -120,6 +149,32 @@ export function spawnEnemy(state, lane = 0) {
   };
 }
 
+export function spawnGate(state, lane = 0, operation = "+", value = 3) {
+  if (state.status !== "running") {
+    return state;
+  }
+
+  const gate = createGate(state, lane, operation, value);
+  return {
+    ...state,
+    nextId: state.nextId + 1,
+    gates: [...state.gates, gate]
+  };
+}
+
+export function spawnPickup(state, lane = 0, value = 2) {
+  if (state.status !== "running") {
+    return state;
+  }
+
+  const pickup = createPickup(state, lane, value);
+  return {
+    ...state,
+    nextId: state.nextId + 1,
+    pickups: [...state.pickups, pickup]
+  };
+}
+
 export function moveCombatants(state, deltaSeconds) {
   return {
     ...state,
@@ -132,7 +187,19 @@ export function moveCombatants(state, deltaSeconds) {
     enemies: state.enemies.map((enemy) => ({
       ...enemy,
       y: enemy.y + enemy.speed * deltaSeconds
-    }))
+    })),
+    gates: state.gates
+      .map((gate) => ({
+        ...gate,
+        y: gate.y + gate.speed * deltaSeconds
+      }))
+      .filter((gate) => gate.y < 1.12),
+    pickups: state.pickups
+      .map((pickup) => ({
+        ...pickup,
+        y: pickup.y + pickup.speed * deltaSeconds
+      }))
+      .filter((pickup) => pickup.y < 1.12)
   };
 }
 
@@ -196,6 +263,95 @@ export function resolveEnemyContacts(state) {
   return nextState;
 }
 
+export function applyGateOperation(squadSize, gate) {
+  const value = Math.max(1, Math.trunc(Number(gate.value)) || 1);
+
+  if (gate.operation === "+") {
+    return clampSquadSize(squadSize + value);
+  }
+
+  if (gate.operation === "-") {
+    return clampSquadSize(squadSize - value);
+  }
+
+  if (gate.operation === "x" || gate.operation === "*") {
+    return clampSquadSize(squadSize * value);
+  }
+
+  if (gate.operation === "/") {
+    return clampSquadSize(Math.floor(squadSize / value));
+  }
+
+  return clampSquadSize(squadSize);
+}
+
+export function resolveGates(state) {
+  if (state.status !== "running") {
+    return state;
+  }
+
+  let squadSize = state.squadSize;
+  const remainingGates = [];
+
+  for (const gate of state.gates) {
+    if (Math.abs(gate.y - PLAYER_Y) <= ITEM_COLLECT_RADIUS && gate.lane === state.lane) {
+      squadSize = applyGateOperation(squadSize, gate);
+    } else if (gate.y <= PLAYER_Y + ITEM_COLLECT_RADIUS) {
+      remainingGates.push(gate);
+    }
+  }
+
+  return setSquadSize(
+    {
+      ...state,
+      gates: remainingGates
+    },
+    squadSize
+  );
+}
+
+export function resolvePickups(state) {
+  if (state.status !== "running") {
+    return state;
+  }
+
+  let squadSize = state.squadSize;
+  const remainingPickups = [];
+
+  for (const pickup of state.pickups) {
+    if (Math.abs(pickup.y - PLAYER_Y) <= ITEM_COLLECT_RADIUS && pickup.lane === state.lane) {
+      squadSize = clampSquadSize(squadSize + pickup.value);
+    } else if (pickup.y <= PLAYER_Y + ITEM_COLLECT_RADIUS) {
+      remainingPickups.push(pickup);
+    }
+  }
+
+  return setSquadSize(
+    {
+      ...state,
+      pickups: remainingPickups
+    },
+    squadSize
+  );
+}
+
+export function chooseGate(random = Math.random) {
+  const roll = random();
+  if (roll < 0.34) {
+    return { operation: "+", value: 3 + Math.floor(random() * 8) };
+  }
+
+  if (roll < 0.58) {
+    return { operation: "-", value: 2 + Math.floor(random() * 6) };
+  }
+
+  if (roll < 0.82) {
+    return { operation: "x", value: 2 };
+  }
+
+  return { operation: "/", value: 2 };
+}
+
 export function tickGame(state, deltaSeconds, random = Math.random) {
   if (state.status !== "running") {
     return state;
@@ -206,7 +362,9 @@ export function tickGame(state, deltaSeconds, random = Math.random) {
   nextState = {
     ...nextState,
     fireCooldown: nextState.fireCooldown - deltaSeconds,
-    enemySpawnCooldown: nextState.enemySpawnCooldown - deltaSeconds
+    enemySpawnCooldown: nextState.enemySpawnCooldown - deltaSeconds,
+    gateSpawnCooldown: nextState.gateSpawnCooldown - deltaSeconds,
+    pickupSpawnCooldown: nextState.pickupSpawnCooldown - deltaSeconds
   };
 
   while (nextState.fireCooldown <= 0) {
@@ -226,9 +384,39 @@ export function tickGame(state, deltaSeconds, random = Math.random) {
     );
   }
 
+  while (nextState.gateSpawnCooldown <= 0) {
+    const gate = chooseGate(random);
+    nextState = spawnGate(
+      {
+        ...nextState,
+        gateSpawnCooldown: nextState.gateSpawnCooldown + Math.max(1.6, GATE_SPAWN_INTERVAL_SECONDS - nextState.elapsed * 0.012)
+      },
+      Math.floor(random() * LANE_COUNT),
+      gate.operation,
+      gate.value
+    );
+  }
+
+  while (nextState.pickupSpawnCooldown <= 0) {
+    nextState = spawnPickup(
+      {
+        ...nextState,
+        pickupSpawnCooldown: nextState.pickupSpawnCooldown + Math.max(1.3, PICKUP_SPAWN_INTERVAL_SECONDS - nextState.elapsed * 0.006)
+      },
+      Math.floor(random() * LANE_COUNT),
+      1 + Math.floor(random() * 4)
+    );
+  }
+
   nextState = moveCombatants(nextState, deltaSeconds);
   nextState = resolveBulletHits(nextState);
   nextState = resolveEnemyContacts(nextState);
+  if (nextState.status === "running") {
+    nextState = resolveGates(nextState);
+  }
+  if (nextState.status === "running") {
+    nextState = resolvePickups(nextState);
+  }
 
   return nextState;
 }

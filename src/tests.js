@@ -2,15 +2,20 @@ import {
   INITIAL_LANE,
   INITIAL_SQUAD_SIZE,
   PLAYER_Y,
+  applyGateOperation,
   clampSquadSize,
   createInitialState,
   moveCombatants,
   moveLane,
+  resolveGates,
   resetState,
   resolveBulletHits,
   resolveEnemyContacts,
+  resolvePickups,
   spawnBullet,
   spawnEnemy,
+  spawnGate,
+  spawnPickup,
   setSquadSize,
   tickFoundation,
   tickGame
@@ -177,6 +182,126 @@ function testEnemyContactDamagesSquadAndCanEndRun() {
   assert(resolved.status === "game-over", "zero squad should end the run");
 }
 
+function testGateOperations() {
+  assert(applyGateOperation(5, { operation: "+", value: 4 }) === 9, "add gate should add");
+  assert(applyGateOperation(5, { operation: "-", value: 4 }) === 1, "subtract gate should subtract");
+  assert(applyGateOperation(5, { operation: "x", value: 3 }) === 15, "multiply gate should multiply");
+  assert(applyGateOperation(5, { operation: "*", value: 3 }) === 15, "asterisk multiply gate should multiply");
+  assert(applyGateOperation(5, { operation: "/", value: 2 }) === 2, "divide gate should floor");
+  assert(applyGateOperation(60, { operation: "x", value: 2 }) === 99, "multiply gate should clamp to max");
+  assert(applyGateOperation(5, { operation: "-", value: 8 }) === 0, "subtract gate should clamp to zero");
+  assert(applyGateOperation(5, { operation: "/", value: 0 }) === 5, "invalid divide values should normalize to one");
+}
+
+function testGateCollisionAppliesCurrentLaneOnly() {
+  const state = {
+    ...createInitialState(),
+    squadSize: 5,
+    gates: [
+      { id: 2, lane: 1, y: PLAYER_Y, operation: "+", value: 5, speed: 0.2 },
+      { id: 3, lane: 0, y: PLAYER_Y, operation: "x", value: 3, speed: 0.2 }
+    ]
+  };
+  const resolved = resolveGates(state);
+
+  assert(resolved.squadSize === 10, "current-lane gate should apply");
+  assert(resolved.gates.length === 1, "other-lane gate should remain");
+  assert(resolved.gates[0].id === 3, "remaining gate should be the other-lane gate");
+}
+
+function testPassedGateCannotBeCollectedLate() {
+  const state = {
+    ...createInitialState(),
+    squadSize: 5,
+    gates: [{ id: 2, lane: 1, y: PLAYER_Y + 0.08, operation: "+", value: 5, speed: 0.2 }]
+  };
+  const resolved = resolveGates(state);
+
+  assert(resolved.squadSize === 5, "passed gate should not apply late");
+  assert(resolved.gates.length === 0, "passed gate should be removed as missed");
+}
+
+function testNegativeGateCanEndRun() {
+  const state = {
+    ...createInitialState(),
+    squadSize: 2,
+    gates: [{ id: 2, lane: 1, y: PLAYER_Y, operation: "-", value: 5, speed: 0.2 }]
+  };
+  const resolved = resolveGates(state);
+
+  assert(resolved.squadSize === 0, "negative gate should clamp to zero");
+  assert(resolved.status === "game-over", "negative gate can end run");
+}
+
+function testPickupCollisionAddsSquad() {
+  const state = {
+    ...createInitialState(),
+    squadSize: 98,
+    pickups: [
+      { id: 2, lane: 1, y: PLAYER_Y, value: 3, speed: 0.2 },
+      { id: 3, lane: 0, y: PLAYER_Y, value: 3, speed: 0.2 }
+    ]
+  };
+  const resolved = resolvePickups(state);
+
+  assert(resolved.squadSize === 99, "pickup should add squad members and clamp to max");
+  assert(resolved.pickups.length === 1, "only current-lane pickup should be removed");
+  assert(resolved.pickups[0].id === 3, "other-lane pickup should remain");
+}
+
+function testPassedPickupCannotBeCollectedLate() {
+  const state = {
+    ...createInitialState(),
+    squadSize: 5,
+    pickups: [{ id: 2, lane: 1, y: PLAYER_Y + 0.08, value: 3, speed: 0.2 }]
+  };
+  const resolved = resolvePickups(state);
+
+  assert(resolved.squadSize === 5, "passed pickup should not apply late");
+  assert(resolved.pickups.length === 0, "passed pickup should be removed as missed");
+}
+
+function testSpawnGateAndPickupUseLaneAndIds() {
+  let state = spawnGate(createInitialState(), 2, "x", 2);
+  state = spawnPickup(state, 0, 4);
+
+  assert(state.gates[0].lane === 2, "gate should use provided lane");
+  assert(state.gates[0].operation === "x", "gate should use provided operation");
+  assert(state.pickups[0].lane === 0, "pickup should use provided lane");
+  assert(state.pickups[0].value === 4, "pickup should use provided value");
+  assert(state.pickups[0].id !== state.gates[0].id, "gate and pickup ids should differ");
+}
+
+function testSpawnGateAndPickupSanitizeInputs() {
+  const withGate = spawnGate(createInitialState(), 12, "/", Number.NaN);
+  const withPickup = spawnPickup(createInitialState(), -4, Number.NaN);
+
+  assert(withGate.gates[0].lane === 2, "gate lane should clamp to the rightmost lane");
+  assert(withGate.gates[0].value === 1, "invalid gate values should normalize to one");
+  assert(withPickup.pickups[0].lane === 0, "pickup lane should clamp to the leftmost lane");
+  assert(withPickup.pickups[0].value === 1, "invalid pickup values should normalize to one");
+}
+
+function testEnemyContactPrecedesGatesAndPickups() {
+  const state = {
+    ...createInitialState(),
+    squadSize: 1,
+    fireCooldown: 10,
+    enemySpawnCooldown: 10,
+    gateSpawnCooldown: 10,
+    pickupSpawnCooldown: 10,
+    enemies: [{ id: 1, lane: 1, y: PLAYER_Y, health: 3, maxHealth: 3, speed: 0, contactDamage: 2 }],
+    gates: [{ id: 2, lane: 1, y: PLAYER_Y, operation: "+", value: 50, speed: 0 }],
+    pickups: [{ id: 3, lane: 1, y: PLAYER_Y, value: 50, speed: 0 }]
+  };
+  const resolved = tickGame(state, 0, () => 0);
+
+  assert(resolved.status === "game-over", "enemy contact should resolve first and end the run");
+  assert(resolved.squadSize === 0, "later gates and pickups should not rescue a defeated squad");
+  assert(resolved.gates.length === 1, "gates should not resolve after enemy-caused game-over");
+  assert(resolved.pickups.length === 1, "pickups should not resolve after enemy-caused game-over");
+}
+
 function testTickGameSpawnsCombatantsDeterministically() {
   const bulletState = tickGame(createInitialState(), 0.4, () => 0.99);
   const enemyState = tickGame(createInitialState(), 0.7, () => 0.99);
@@ -184,6 +309,51 @@ function testTickGameSpawnsCombatantsDeterministically() {
   assert(bulletState.bullets.length > 0, "tickGame should spawn bullets after cooldown");
   assert(enemyState.enemies.length > 0, "tickGame should spawn enemies after cooldown");
   assert(enemyState.enemies[0].lane === 2, "random value should choose deterministic lane");
+}
+
+function testTickGameSpawnsGatesAndPickups() {
+  const values = [0.1, 0.9, 0.66, 0.8, 0.75];
+  let index = 0;
+  const state = tickGame(createInitialState(), 2.2, () => values[index++] ?? 0);
+
+  assert(state.gates.length > 0, "tickGame should spawn gates after cooldown");
+  assert(state.pickups.length > 0, "tickGame should spawn pickups after cooldown");
+}
+
+function testDifficultyRampIncreasesEnemyStats() {
+  const early = spawnEnemy(createInitialState(), 1).enemies[0];
+  const late = spawnEnemy(
+    {
+      ...createInitialState(),
+      elapsed: 54
+    },
+    1
+  ).enemies[0];
+
+  assert(late.health > early.health, "difficulty should increase enemy health over time");
+  assert(late.contactDamage > early.contactDamage, "difficulty should increase contact damage over time");
+  assert(late.speed > early.speed, "difficulty should increase enemy speed over time");
+}
+
+function testSpawnCooldownFloorsHoldAtHighElapsed() {
+  let randomIndex = 0;
+  const randomValues = [0.5, 0.2, 0.5, 0.2];
+  const state = tickGame(
+    {
+      ...createInitialState(),
+      elapsed: 400,
+      fireCooldown: 10,
+      enemySpawnCooldown: 0,
+      gateSpawnCooldown: 0,
+      pickupSpawnCooldown: 0
+    },
+    0,
+    () => randomValues[randomIndex++] ?? 0.5
+  );
+
+  assert(state.enemySpawnCooldown === 0.45, "enemy spawn cooldown should respect floor");
+  assert(state.gateSpawnCooldown === 1.6, "gate spawn cooldown should respect floor");
+  assert(state.pickupSpawnCooldown === 1.3, "pickup spawn cooldown should respect floor");
 }
 
 function testResetStateReturnsFreshInitialState() {
@@ -212,7 +382,19 @@ export function runTests() {
     testBulletHitUsesLaneCollision,
     testBulletHitTargetsNearestEnemy,
     testEnemyContactDamagesSquadAndCanEndRun,
+    testGateOperations,
+    testGateCollisionAppliesCurrentLaneOnly,
+    testPassedGateCannotBeCollectedLate,
+    testNegativeGateCanEndRun,
+    testPickupCollisionAddsSquad,
+    testPassedPickupCannotBeCollectedLate,
+    testSpawnGateAndPickupUseLaneAndIds,
+    testSpawnGateAndPickupSanitizeInputs,
+    testEnemyContactPrecedesGatesAndPickups,
     testTickGameSpawnsCombatantsDeterministically,
+    testTickGameSpawnsGatesAndPickups,
+    testDifficultyRampIncreasesEnemyStats,
+    testSpawnCooldownFloorsHoldAtHighElapsed,
     testResetStateReturnsFreshInitialState
   ];
 

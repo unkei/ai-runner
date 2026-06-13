@@ -25,6 +25,8 @@ function laneCenter(lane) {
 function render() {
   context.clearRect(0, 0, canvas.width, canvas.height);
   drawTrack();
+  drawGates();
+  drawPickups();
   drawEnemies();
   drawBullets();
   drawSquad();
@@ -117,6 +119,51 @@ function drawEnemies() {
     context.fillRect(x - 22, y - 34, 44, 6);
     context.fillStyle = "#22c55e";
     context.fillRect(x - 22, y - 34, 44 * healthRatio, 6);
+  }
+}
+
+function gateLabel(gate) {
+  return `${gate.operation}${gate.value}`;
+}
+
+function drawGates() {
+  for (const gate of state.gates) {
+    const x = laneCenter(gate.lane);
+    const y = gate.y * canvas.height;
+    const isPositive = gate.operation === "+" || gate.operation === "x" || gate.operation === "*";
+
+    context.fillStyle = isPositive ? "#22c55e" : "#ef4444";
+    context.strokeStyle = isPositive ? "#14532d" : "#7f1d1d";
+    context.lineWidth = 3;
+    context.beginPath();
+    context.roundRect(x - 42, y - 24, 84, 48, 8);
+    context.fill();
+    context.stroke();
+
+    context.fillStyle = "#f8fafc";
+    context.font = "800 24px system-ui, sans-serif";
+    context.textAlign = "center";
+    context.fillText(gateLabel(gate), x, y + 8);
+  }
+}
+
+function drawPickups() {
+  for (const pickup of state.pickups) {
+    const x = laneCenter(pickup.lane);
+    const y = pickup.y * canvas.height;
+
+    context.fillStyle = "#a78bfa";
+    context.strokeStyle = "#4c1d95";
+    context.lineWidth = 3;
+    context.beginPath();
+    context.arc(x, y, 20, 0, Math.PI * 2);
+    context.fill();
+    context.stroke();
+
+    context.fillStyle = "#f8fafc";
+    context.font = "800 18px system-ui, sans-serif";
+    context.textAlign = "center";
+    context.fillText(`+${pickup.value}`, x, y + 6);
   }
 }
 
