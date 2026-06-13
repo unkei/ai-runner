@@ -1,18 +1,22 @@
-export const LANE_COUNT = 3;
 export const MIN_SQUAD_SIZE = 0;
-export const MAX_SQUAD_SIZE = 99;
-export const INITIAL_SQUAD_SIZE = 5;
-export const INITIAL_LANE = 1;
-export const PLAYER_Y = 0.86;
-export const BULLET_SPEED = 1.65;
-export const ENEMY_BASE_SPEED = 0.18;
-export const FIRE_INTERVAL_SECONDS = 0.36;
-export const ENEMY_SPAWN_INTERVAL_SECONDS = 1.05;
-export const HIT_RADIUS = 0.045;
-export const GATE_SPAWN_INTERVAL_SECONDS = 3.1;
-export const PICKUP_SPAWN_INTERVAL_SECONDS = 2.4;
-export const ITEM_SPEED = 0.24;
-export const ITEM_COLLECT_RADIUS = 0.055;
+export const MAX_SQUAD_SIZE = 180;
+export const INITIAL_SQUAD_SIZE = 12;
+export const INITIAL_PLAYER_X = 0.5;
+export const PLAYER_Y = 0.84;
+export const PLAYER_SPEED = 0.88;
+export const TRACK_MIN_X = 0.12;
+export const TRACK_MAX_X = 0.88;
+export const ENEMY_BASE_SPEED = 0.16;
+export const ENEMY_SPAWN_INTERVAL_SECONDS = 2.2;
+export const GATE_SPAWN_INTERVAL_SECONDS = 3.25;
+export const ARROW_SPEED = 0.72;
+export const ARROW_DAMAGE = 1;
+export const ARCHER_STAGE = 2;
+export const BOSS_STAGE = 4;
+export const STAGE_DISTANCE = 260;
+export const CONTACT_RADIUS_X = 0.14;
+export const CONTACT_RADIUS_Y = 0.065;
+export const GATE_COLLECT_RADIUS_Y = 0.065;
 
 export function clamp(value, min, max) {
   const numericValue = Number(value);
@@ -21,36 +25,48 @@ export function clamp(value, min, max) {
     return min;
   }
 
-  return Math.min(max, Math.max(min, Math.trunc(numericValue)));
+  return Math.min(max, Math.max(min, numericValue));
+}
+
+export function clampInteger(value, min, max) {
+  return Math.trunc(clamp(value, min, max));
+}
+
+export function clampSquadSize(size) {
+  return clampInteger(size, MIN_SQUAD_SIZE, MAX_SQUAD_SIZE);
+}
+
+export function clampPlayerX(x) {
+  return clamp(x, TRACK_MIN_X, TRACK_MAX_X);
+}
+
+export function currentStage(distance) {
+  return Math.max(1, Math.floor(distance / STAGE_DISTANCE) + 1);
 }
 
 export function createInitialState() {
   return {
     status: "running",
-    lane: INITIAL_LANE,
+    playerX: INITIAL_PLAYER_X,
+    inputX: 0,
     squadSize: INITIAL_SQUAD_SIZE,
     score: 0,
     killScore: 0,
     distance: 0,
     elapsed: 0,
+    stage: 1,
     nextId: 1,
-    fireCooldown: FIRE_INTERVAL_SECONDS,
-    enemySpawnCooldown: 0.65,
-    gateSpawnCooldown: 1.6,
-    pickupSpawnCooldown: 2.1,
-    bullets: [],
+    enemySpawnCooldown: 1.1,
+    gateSpawnCooldown: 1.5,
+    bossSpawned: false,
     enemies: [],
     gates: [],
-    pickups: []
+    arrows: []
   };
 }
 
 export function resetState() {
   return createInitialState();
-}
-
-export function clampSquadSize(size) {
-  return clamp(size, MIN_SQUAD_SIZE, MAX_SQUAD_SIZE);
 }
 
 export function normalizeDirection(direction) {
@@ -63,11 +79,25 @@ export function normalizeDirection(direction) {
   return numericDirection < 0 ? -1 : 1;
 }
 
-export function moveLane(state, direction) {
-  const nextLane = clamp(state.lane + normalizeDirection(direction), 0, LANE_COUNT - 1);
+export function movePlayer(state, direction, deltaSeconds = 1 / 12) {
+  const nextX = clampPlayerX(state.playerX + normalizeDirection(direction) * PLAYER_SPEED * deltaSeconds);
   return {
     ...state,
-    lane: nextLane
+    playerX: nextX
+  };
+}
+
+export function setPlayerX(state, x) {
+  return {
+    ...state,
+    playerX: clampPlayerX(x)
+  };
+}
+
+export function setInputX(state, inputX) {
+  return {
+    ...state,
+    inputX: normalizeDirection(inputX)
   };
 }
 
@@ -78,189 +108,6 @@ export function setSquadSize(state, size) {
     squadSize,
     status: squadSize <= 0 ? "game-over" : state.status
   };
-}
-
-export function createBullet(state) {
-  return {
-    id: state.nextId,
-    lane: state.lane,
-    y: PLAYER_Y - 0.08,
-    damage: Math.max(1, Math.floor(state.squadSize / 2))
-  };
-}
-
-export function createEnemy(state, lane = 0) {
-  const difficulty = 1 + Math.floor(state.elapsed / 18);
-  return {
-    id: state.nextId,
-    lane,
-    y: -0.08,
-    health: 2 + difficulty,
-    maxHealth: 2 + difficulty,
-    speed: ENEMY_BASE_SPEED + difficulty * 0.015,
-    contactDamage: 1 + Math.floor(difficulty / 2)
-  };
-}
-
-export function createGate(state, lane = 0, operation = "+", value = 3) {
-  return {
-    id: state.nextId,
-    lane: clamp(lane, 0, LANE_COUNT - 1),
-    y: -0.08,
-    operation,
-    value: Math.max(1, Math.trunc(Number(value)) || 1),
-    speed: ITEM_SPEED
-  };
-}
-
-export function createPickup(state, lane = 0, value = 2) {
-  return {
-    id: state.nextId,
-    lane: clamp(lane, 0, LANE_COUNT - 1),
-    y: -0.08,
-    value: Math.max(1, Math.trunc(Number(value)) || 1),
-    speed: ITEM_SPEED * 1.08
-  };
-}
-
-export function spawnBullet(state) {
-  if (state.status !== "running" || state.squadSize <= 0) {
-    return state;
-  }
-
-  const bullet = createBullet(state);
-  return {
-    ...state,
-    nextId: state.nextId + 1,
-    bullets: [...state.bullets, bullet]
-  };
-}
-
-export function spawnEnemy(state, lane = 0) {
-  if (state.status !== "running") {
-    return state;
-  }
-
-  const enemy = createEnemy(state, clamp(lane, 0, LANE_COUNT - 1));
-  return {
-    ...state,
-    nextId: state.nextId + 1,
-    enemies: [...state.enemies, enemy]
-  };
-}
-
-export function spawnGate(state, lane = 0, operation = "+", value = 3) {
-  if (state.status !== "running") {
-    return state;
-  }
-
-  const gate = createGate(state, lane, operation, value);
-  return {
-    ...state,
-    nextId: state.nextId + 1,
-    gates: [...state.gates, gate]
-  };
-}
-
-export function spawnPickup(state, lane = 0, value = 2) {
-  if (state.status !== "running") {
-    return state;
-  }
-
-  const pickup = createPickup(state, lane, value);
-  return {
-    ...state,
-    nextId: state.nextId + 1,
-    pickups: [...state.pickups, pickup]
-  };
-}
-
-export function moveCombatants(state, deltaSeconds) {
-  return {
-    ...state,
-    bullets: state.bullets
-      .map((bullet) => ({
-        ...bullet,
-        y: bullet.y - BULLET_SPEED * deltaSeconds
-      }))
-      .filter((bullet) => bullet.y > -0.12),
-    enemies: state.enemies.map((enemy) => ({
-      ...enemy,
-      y: enemy.y + enemy.speed * deltaSeconds
-    })),
-    gates: state.gates
-      .map((gate) => ({
-        ...gate,
-        y: gate.y + gate.speed * deltaSeconds
-      }))
-      .filter((gate) => gate.y < 1.12),
-    pickups: state.pickups
-      .map((pickup) => ({
-        ...pickup,
-        y: pickup.y + pickup.speed * deltaSeconds
-      }))
-      .filter((pickup) => pickup.y < 1.12)
-  };
-}
-
-export function resolveBulletHits(state) {
-  const enemiesById = new Map(state.enemies.map((enemy) => [enemy.id, { ...enemy }]));
-  const spentBulletIds = new Set();
-  let killScore = state.killScore ?? 0;
-
-  const sortedBullets = [...state.bullets].sort((a, b) => a.y - b.y);
-
-  for (const bullet of sortedBullets) {
-    const targets = [...enemiesById.values()]
-      .filter((enemy) => enemy.lane === bullet.lane && Math.abs(enemy.y - bullet.y) <= HIT_RADIUS)
-      .sort((a, b) => Math.abs(a.y - bullet.y) - Math.abs(b.y - bullet.y));
-
-    const target = targets[0];
-    if (!target) {
-      continue;
-    }
-
-    spentBulletIds.add(bullet.id);
-    target.health -= bullet.damage;
-
-    if (target.health <= 0) {
-      enemiesById.delete(target.id);
-      killScore += 25 + target.maxHealth * 5;
-    } else {
-      enemiesById.set(target.id, target);
-    }
-  }
-
-  return {
-    ...state,
-    killScore,
-    bullets: state.bullets.filter((bullet) => !spentBulletIds.has(bullet.id)),
-    enemies: [...enemiesById.values()],
-    score: Math.floor(state.distance) + killScore
-  };
-}
-
-export function resolveEnemyContacts(state) {
-  let squadSize = state.squadSize;
-  const remainingEnemies = [];
-
-  for (const enemy of state.enemies) {
-    if (enemy.y >= PLAYER_Y && enemy.lane === state.lane) {
-      squadSize -= enemy.contactDamage;
-    } else if (enemy.y < 1.12) {
-      remainingEnemies.push(enemy);
-    }
-  }
-
-  const nextState = setSquadSize(
-    {
-      ...state,
-      enemies: remainingEnemies
-    },
-    squadSize
-  );
-
-  return nextState;
 }
 
 export function applyGateOperation(squadSize, gate) {
@@ -285,71 +132,259 @@ export function applyGateOperation(squadSize, gate) {
   return clampSquadSize(squadSize);
 }
 
-export function resolveGates(state) {
+export function chooseGatePair(random = Math.random) {
+  const first = random() < 0.6
+    ? { operation: "+", value: 5 + Math.floor(random() * 11) }
+    : { operation: "x", value: 2 };
+  const second = random() < 0.54
+    ? { operation: "-", value: 3 + Math.floor(random() * 8) }
+    : { operation: "+", value: 3 + Math.floor(random() * 8) };
+
+  return [
+    { ...first, side: "left", x: 0.31 },
+    { ...second, side: "right", x: 0.69 }
+  ];
+}
+
+export function createGatePair(state, random = Math.random) {
+  return chooseGatePair(random).map((gate, index) => ({
+    id: state.nextId + index,
+    y: -0.08,
+    speed: 0.24,
+    width: 0.34,
+    ...gate
+  }));
+}
+
+export function createEnemy(state, x = 0.5, type = "grunt") {
+  const stage = currentStage(state.distance);
+  const isBoss = type === "boss";
+  const isArcher = type === "archer";
+  const count = isBoss
+    ? 34 + stage * 9
+    : 8 + stage * 3 + Math.floor((state.elapsed % 9) / 3);
+
+  return {
+    id: state.nextId,
+    type,
+    x: clampPlayerX(x),
+    y: isBoss ? -0.18 : -0.1,
+    count,
+    maxCount: count,
+    speed: isBoss ? 0.09 : ENEMY_BASE_SPEED + stage * 0.012,
+    fireCooldown: isArcher ? 1.0 : Number.POSITIVE_INFINITY
+  };
+}
+
+export function createArrow(state, enemy) {
+  return {
+    id: state.nextId,
+    x: enemy.x,
+    y: enemy.y + 0.035,
+    speed: ARROW_SPEED,
+    damage: ARROW_DAMAGE
+  };
+}
+
+export function spawnGatePair(state, random = Math.random) {
+  if (state.status !== "running") {
+    return state;
+  }
+
+  const gates = createGatePair(state, random);
+  return {
+    ...state,
+    nextId: state.nextId + gates.length,
+    gates: [...state.gates, ...gates]
+  };
+}
+
+export function spawnEnemy(state, x = 0.5, type = "grunt") {
+  if (state.status !== "running") {
+    return state;
+  }
+
+  const enemy = createEnemy(state, x, type);
+  return {
+    ...state,
+    nextId: state.nextId + 1,
+    enemies: [...state.enemies, enemy],
+    bossSpawned: state.bossSpawned || type === "boss"
+  };
+}
+
+export function spawnArrow(state, enemy) {
+  if (state.status !== "running") {
+    return state;
+  }
+
+  const arrow = createArrow(state, enemy);
+  return {
+    ...state,
+    nextId: state.nextId + 1,
+    arrows: [...state.arrows, arrow]
+  };
+}
+
+export function moveWorld(state, deltaSeconds) {
+  return {
+    ...state,
+    playerX: clampPlayerX(state.playerX + state.inputX * PLAYER_SPEED * deltaSeconds),
+    enemies: state.enemies
+      .map((enemy) => ({
+        ...enemy,
+        y: enemy.y + enemy.speed * deltaSeconds,
+        fireCooldown: enemy.fireCooldown - deltaSeconds
+      }))
+      .filter((enemy) => enemy.y < 1.14 && enemy.count > 0),
+    gates: state.gates
+      .map((gate) => ({
+        ...gate,
+        y: gate.y + gate.speed * deltaSeconds
+      }))
+      .filter((gate) => gate.y < PLAYER_Y + GATE_COLLECT_RADIUS_Y),
+    arrows: state.arrows
+      .map((arrow) => ({
+        ...arrow,
+        y: arrow.y + arrow.speed * deltaSeconds
+      }))
+      .filter((arrow) => arrow.y < 1.12)
+  };
+}
+
+export function resolveGateContacts(state) {
   if (state.status !== "running") {
     return state;
   }
 
   let squadSize = state.squadSize;
   const remainingGates = [];
+  const gatesByPairKey = new Map();
 
   for (const gate of state.gates) {
-    if (Math.abs(gate.y - PLAYER_Y) <= ITEM_COLLECT_RADIUS && gate.lane === state.lane) {
-      squadSize = applyGateOperation(squadSize, gate);
-    } else if (gate.y <= PLAYER_Y + ITEM_COLLECT_RADIUS) {
-      remainingGates.push(gate);
+    const pairKey = Math.round(gate.y * 1000);
+    gatesByPairKey.set(pairKey, [...(gatesByPairKey.get(pairKey) ?? []), gate]);
+  }
+
+  for (const gates of gatesByPairKey.values()) {
+    const gateY = gates[0].y;
+    const overlapsY = Math.abs(gateY - PLAYER_Y) <= GATE_COLLECT_RADIUS_Y;
+
+    if (overlapsY) {
+      const selectedSide = state.playerX <= 0.5 ? "left" : "right";
+      const selectedGate = gates.find((gate) => gate.side === selectedSide) ?? gates[0];
+      squadSize = applyGateOperation(squadSize, selectedGate);
+      continue;
+    }
+
+    if (gateY <= PLAYER_Y + GATE_COLLECT_RADIUS_Y) {
+      remainingGates.push(...gates);
     }
   }
 
-  return setSquadSize(
-    {
-      ...state,
-      gates: remainingGates
-    },
-    squadSize
-  );
+  return setSquadSize({ ...state, gates: remainingGates }, squadSize);
 }
 
-export function resolvePickups(state) {
+export function resolveEnemyContacts(state) {
   if (state.status !== "running") {
     return state;
   }
 
   let squadSize = state.squadSize;
-  const remainingPickups = [];
+  let killScore = state.killScore ?? 0;
+  const remainingEnemies = [];
 
-  for (const pickup of state.pickups) {
-    if (Math.abs(pickup.y - PLAYER_Y) <= ITEM_COLLECT_RADIUS && pickup.lane === state.lane) {
-      squadSize = clampSquadSize(squadSize + pickup.value);
-    } else if (pickup.y <= PLAYER_Y + ITEM_COLLECT_RADIUS) {
-      remainingPickups.push(pickup);
+  for (const enemy of state.enemies) {
+    const overlapsX = Math.abs(enemy.x - state.playerX) <= CONTACT_RADIUS_X + Math.min(0.14, enemy.count * 0.0018);
+    const overlapsY = Math.abs(enemy.y - PLAYER_Y) <= CONTACT_RADIUS_Y || enemy.y > PLAYER_Y;
+
+    if (overlapsX && overlapsY) {
+      const defeated = Math.min(squadSize, enemy.count);
+      squadSize -= defeated;
+      const enemyCount = enemy.count - defeated;
+      killScore += defeated * (enemy.type === "boss" ? 8 : 4);
+
+      if (enemyCount > 0) {
+        remainingEnemies.push({ ...enemy, count: enemyCount, y: PLAYER_Y - CONTACT_RADIUS_Y });
+      }
+    } else if (enemy.y < 1.12) {
+      remainingEnemies.push(enemy);
     }
   }
 
   return setSquadSize(
     {
       ...state,
-      pickups: remainingPickups
+      enemies: remainingEnemies,
+      killScore,
+      score: Math.floor(state.distance) + killScore
     },
     squadSize
   );
 }
 
-export function chooseGate(random = Math.random) {
-  const roll = random();
-  if (roll < 0.34) {
-    return { operation: "+", value: 3 + Math.floor(random() * 8) };
+export function resolveArrowContacts(state) {
+  if (state.status !== "running") {
+    return state;
   }
 
-  if (roll < 0.58) {
-    return { operation: "-", value: 2 + Math.floor(random() * 6) };
+  let squadSize = state.squadSize;
+  const remainingArrows = [];
+
+  for (const arrow of state.arrows) {
+    const overlapsX = Math.abs(arrow.x - state.playerX) <= CONTACT_RADIUS_X * 0.78;
+    const overlapsY = Math.abs(arrow.y - PLAYER_Y) <= CONTACT_RADIUS_Y;
+
+    if (overlapsX && overlapsY) {
+      squadSize -= arrow.damage;
+    } else if (arrow.y <= PLAYER_Y + CONTACT_RADIUS_Y) {
+      remainingArrows.push(arrow);
+    }
   }
 
-  if (roll < 0.82) {
-    return { operation: "x", value: 2 };
+  return setSquadSize({ ...state, arrows: remainingArrows }, squadSize);
+}
+
+export function resolveEnemyFiring(state) {
+  if (state.status !== "running") {
+    return state;
   }
 
-  return { operation: "/", value: 2 };
+  let nextState = state;
+  const enemies = [];
+
+  for (const enemy of nextState.enemies) {
+    if (enemy.type !== "archer" || enemy.fireCooldown > 0 || enemy.y > PLAYER_Y - 0.16) {
+      enemies.push(enemy);
+      continue;
+    }
+
+    nextState = spawnArrow(nextState, enemy);
+    enemies.push({ ...enemy, fireCooldown: Math.max(0.8, 1.5 - nextState.stage * 0.08) });
+  }
+
+  return {
+    ...nextState,
+    enemies
+  };
+}
+
+export function tickFoundation(state, deltaSeconds) {
+  if (state.status !== "running") {
+    return state;
+  }
+
+  const elapsed = state.elapsed + deltaSeconds;
+  const distance = state.distance + deltaSeconds * 24;
+  const stage = currentStage(distance);
+
+  return {
+    ...state,
+    elapsed,
+    distance,
+    stage,
+    score: Math.floor(distance) + (state.killScore ?? 0)
+  };
 }
 
 export function tickGame(state, deltaSeconds, random = Math.random) {
@@ -361,78 +396,45 @@ export function tickGame(state, deltaSeconds, random = Math.random) {
 
   nextState = {
     ...nextState,
-    fireCooldown: nextState.fireCooldown - deltaSeconds,
     enemySpawnCooldown: nextState.enemySpawnCooldown - deltaSeconds,
-    gateSpawnCooldown: nextState.gateSpawnCooldown - deltaSeconds,
-    pickupSpawnCooldown: nextState.pickupSpawnCooldown - deltaSeconds
+    gateSpawnCooldown: nextState.gateSpawnCooldown - deltaSeconds
   };
 
-  while (nextState.fireCooldown <= 0) {
-    nextState = spawnBullet({
-      ...nextState,
-      fireCooldown: nextState.fireCooldown + FIRE_INTERVAL_SECONDS
-    });
+  while (nextState.gateSpawnCooldown <= 0) {
+    nextState = spawnGatePair(
+      {
+        ...nextState,
+        gateSpawnCooldown: nextState.gateSpawnCooldown + Math.max(2.0, GATE_SPAWN_INTERVAL_SECONDS - nextState.stage * 0.16)
+      },
+      random
+    );
   }
 
   while (nextState.enemySpawnCooldown <= 0) {
+    const type = nextState.stage >= ARCHER_STAGE && random() > 0.62 ? "archer" : "grunt";
     nextState = spawnEnemy(
       {
         ...nextState,
-        enemySpawnCooldown: nextState.enemySpawnCooldown + Math.max(0.45, ENEMY_SPAWN_INTERVAL_SECONDS - nextState.elapsed * 0.008)
+        enemySpawnCooldown: nextState.enemySpawnCooldown + Math.max(1.1, ENEMY_SPAWN_INTERVAL_SECONDS - nextState.stage * 0.18)
       },
-      Math.floor(random() * LANE_COUNT)
+      0.2 + random() * 0.6,
+      type
     );
   }
 
-  while (nextState.gateSpawnCooldown <= 0) {
-    const gate = chooseGate(random);
-    nextState = spawnGate(
-      {
-        ...nextState,
-        gateSpawnCooldown: nextState.gateSpawnCooldown + Math.max(1.6, GATE_SPAWN_INTERVAL_SECONDS - nextState.elapsed * 0.012)
-      },
-      Math.floor(random() * LANE_COUNT),
-      gate.operation,
-      gate.value
-    );
+  if (nextState.stage >= BOSS_STAGE && !nextState.bossSpawned) {
+    nextState = spawnEnemy(nextState, 0.5, "boss");
   }
 
-  while (nextState.pickupSpawnCooldown <= 0) {
-    nextState = spawnPickup(
-      {
-        ...nextState,
-        pickupSpawnCooldown: nextState.pickupSpawnCooldown + Math.max(1.3, PICKUP_SPAWN_INTERVAL_SECONDS - nextState.elapsed * 0.006)
-      },
-      Math.floor(random() * LANE_COUNT),
-      1 + Math.floor(random() * 4)
-    );
-  }
-
-  nextState = moveCombatants(nextState, deltaSeconds);
-  nextState = resolveBulletHits(nextState);
-  nextState = resolveEnemyContacts(nextState);
+  nextState = moveWorld(nextState, deltaSeconds);
+  nextState = resolveEnemyFiring(nextState);
+  nextState = resolveArrowContacts(nextState);
   if (nextState.status === "running") {
-    nextState = resolveGates(nextState);
+    nextState = resolveEnemyContacts(nextState);
   }
   if (nextState.status === "running") {
-    nextState = resolvePickups(nextState);
+    nextState = resolveGateContacts(nextState);
   }
 
   return nextState;
-}
-
-export function tickFoundation(state, deltaSeconds) {
-  if (state.status !== "running") {
-    return state;
-  }
-
-  const elapsed = state.elapsed + deltaSeconds;
-  const distance = state.distance + deltaSeconds * 24;
-
-  return {
-    ...state,
-    elapsed,
-    distance,
-    score: Math.floor(distance) + (state.killScore ?? 0)
-  };
 }

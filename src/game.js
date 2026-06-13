@@ -1,8 +1,11 @@
 import {
-  LANE_COUNT,
-  moveLane,
   PLAYER_Y,
+  TRACK_MAX_X,
+  TRACK_MIN_X,
+  movePlayer,
   resetState,
+  setInputX,
+  setPlayerX,
   tickGame
 } from "./state.js";
 
@@ -16,109 +19,247 @@ const rightButton = document.querySelector("#right");
 
 let state = resetState();
 let lastFrame = performance.now();
-let touchStartX = null;
+let pointerActive = false;
+const heldDirections = new Set();
 
-function laneCenter(lane) {
-  return (canvas.width / LANE_COUNT) * lane + canvas.width / LANE_COUNT / 2;
+function updateKeyboardInput() {
+  const leftHeld = heldDirections.has("left");
+  const rightHeld = heldDirections.has("right");
+  state = setInputX(state, (rightHeld ? 1 : 0) + (leftHeld ? -1 : 0));
+}
+
+function worldXToCanvas(x, y = PLAYER_Y) {
+  const perspective = 0.32 + y * 0.86;
+  const trackLeft = canvas.width * (0.5 - perspective * 0.43);
+  const trackRight = canvas.width * (0.5 + perspective * 0.43);
+  return trackLeft + ((x - TRACK_MIN_X) / (TRACK_MAX_X - TRACK_MIN_X)) * (trackRight - trackLeft);
+}
+
+function worldYToCanvas(y) {
+  return canvas.height * (0.05 + y * 0.9);
+}
+
+function worldToCanvas(x, y) {
+  return {
+    x: worldXToCanvas(x, y),
+    y: worldYToCanvas(y),
+    scale: 0.44 + y * 0.78
+  };
 }
 
 function render() {
   context.clearRect(0, 0, canvas.width, canvas.height);
+  drawSky();
   drawTrack();
+  drawProgress();
   drawGates();
-  drawPickups();
+  drawArrows();
   drawEnemies();
-  drawBullets();
   drawSquad();
   drawOverlay();
   updateHud();
 }
 
-function drawTrack() {
-  const laneWidth = canvas.width / LANE_COUNT;
-  const scroll = state.distance % 64;
-
-  context.fillStyle = "#10141f";
+function drawSky() {
+  const gradient = context.createLinearGradient(0, 0, 0, canvas.height);
+  gradient.addColorStop(0, "#38c9ef");
+  gradient.addColorStop(0.56, "#9be9f4");
+  gradient.addColorStop(1, "#dff7fb");
+  context.fillStyle = gradient;
   context.fillRect(0, 0, canvas.width, canvas.height);
 
-  for (let lane = 0; lane < LANE_COUNT; lane += 1) {
-    context.fillStyle = lane === state.lane ? "#1b2a3f" : "#151c2b";
-    context.fillRect(lane * laneWidth + 4, 0, laneWidth - 8, canvas.height);
+  context.fillStyle = "rgba(255,255,255,0.22)";
+  for (const block of [
+    [24, 132, 72, 34],
+    [338, 186, 54, 46],
+    [44, 418, 46, 72],
+    [330, 18, 82, 44]
+  ]) {
+    context.save();
+    context.translate(block[0], block[1]);
+    context.rotate(-0.25);
+    context.fillRect(0, 0, block[2], block[3]);
+    context.restore();
   }
+}
 
-  context.strokeStyle = "#526070";
-  context.lineWidth = 2;
-  context.setLineDash([18, 22]);
-  context.lineDashOffset = scroll;
+function drawTrack() {
+  const topY = canvas.height * 0.04;
+  const bottomY = canvas.height * 0.98;
+  const topHalf = canvas.width * 0.17;
+  const bottomHalf = canvas.width * 0.48;
 
-  for (let lane = 1; lane < LANE_COUNT; lane += 1) {
+  context.fillStyle = "#f8fdff";
+  context.beginPath();
+  context.moveTo(canvas.width / 2 - topHalf, topY);
+  context.lineTo(canvas.width / 2 + topHalf, topY);
+  context.lineTo(canvas.width / 2 + bottomHalf, bottomY);
+  context.lineTo(canvas.width / 2 - bottomHalf, bottomY);
+  context.closePath();
+  context.fill();
+
+  context.strokeStyle = "#e7fbff";
+  context.lineWidth = 8;
+  context.stroke();
+
+  const scroll = (state.distance * 0.9) % 150;
+  for (let y = -120 + scroll; y < canvas.height + 120; y += 150) {
+    const depth = y / canvas.height;
+    const half = canvas.width * (0.18 + depth * 0.3);
+    context.fillStyle = "rgba(193, 221, 230, 0.32)";
     context.beginPath();
-    context.moveTo(lane * laneWidth, 0);
-    context.lineTo(lane * laneWidth, canvas.height);
-    context.stroke();
+    context.moveTo(canvas.width / 2 - half * 0.74, y + 46);
+    context.lineTo(canvas.width / 2 + half * 0.74, y + 46);
+    context.lineTo(canvas.width / 2 + half, y + 92);
+    context.lineTo(canvas.width / 2 - half, y + 92);
+    context.closePath();
+    context.fill();
+  }
+}
+
+function drawProgress() {
+  const width = 158;
+  const x = canvas.width / 2 - width / 2;
+  const y = 20;
+  const progress = (state.distance % 260) / 260;
+
+  context.fillStyle = "rgba(24, 75, 105, 0.46)";
+  context.beginPath();
+  context.roundRect(x, y, width, 12, 6);
+  context.fill();
+  context.fillStyle = "#28c7f2";
+  context.beginPath();
+  context.roundRect(x, y, width * progress, 12, 6);
+  context.fill();
+
+  context.fillStyle = "#f8fafc";
+  context.strokeStyle = "#63d8f7";
+  context.lineWidth = 4;
+  context.beginPath();
+  context.arc(x, y + 6, 14, 0, Math.PI * 2);
+  context.fill();
+  context.stroke();
+  context.fillStyle = "#38bdf8";
+  context.font = "800 16px system-ui, sans-serif";
+  context.textAlign = "center";
+  context.fillText(String(state.stage), x, y + 12);
+
+  context.fillStyle = "#f8fafc";
+  context.strokeStyle = "#64748b";
+  context.beginPath();
+  context.arc(x + width, y + 6, 14, 0, Math.PI * 2);
+  context.fill();
+  context.stroke();
+  context.fillStyle = "#0f172a";
+  context.font = "800 15px system-ui, sans-serif";
+  context.fillText("GO", x + width, y + 11);
+}
+
+function drawBubble(x, y, value, fill) {
+  context.fillStyle = fill;
+  context.beginPath();
+  context.roundRect(x - 26, y - 44, 52, 30, 15);
+  context.fill();
+  context.beginPath();
+  context.moveTo(x - 6, y - 15);
+  context.lineTo(x + 6, y - 15);
+  context.lineTo(x, y - 6);
+  context.closePath();
+  context.fill();
+  context.fillStyle = "#ffffff";
+  context.font = "900 20px system-ui, sans-serif";
+  context.textAlign = "center";
+  context.fillText(String(value), x, y - 22);
+}
+
+function drawStickFigure(x, y, scale, fill, stroke = "rgba(15,23,42,0.14)") {
+  const head = 7.2 * scale;
+  const body = 17 * scale;
+  const leg = 13 * scale;
+
+  context.strokeStyle = stroke;
+  context.lineWidth = Math.max(2, 3 * scale);
+  context.lineCap = "round";
+  context.fillStyle = fill;
+
+  context.beginPath();
+  context.ellipse(x + 6 * scale, y + body + leg - 1, 10 * scale, 3.2 * scale, -0.18, 0, Math.PI * 2);
+  context.fillStyle = "rgba(15, 23, 42, 0.16)";
+  context.fill();
+
+  context.fillStyle = fill;
+  context.beginPath();
+  context.arc(x, y, head, 0, Math.PI * 2);
+  context.fill();
+
+  context.beginPath();
+  context.moveTo(x, y + head);
+  context.lineTo(x, y + body);
+  context.moveTo(x - 9 * scale, y + 11 * scale);
+  context.lineTo(x + 9 * scale, y + 14 * scale);
+  context.moveTo(x, y + body);
+  context.lineTo(x - 7 * scale, y + body + leg);
+  context.moveTo(x, y + body);
+  context.lineTo(x + 7 * scale, y + body + leg);
+  context.stroke();
+}
+
+function formationOffsets(count) {
+  const visible = Math.min(count, 72);
+  const offsets = [];
+  const columns = Math.ceil(Math.sqrt(visible * 1.45));
+  const spacingX = 17;
+  const spacingY = 17;
+
+  for (let index = 0; index < visible; index += 1) {
+    const row = Math.floor(index / columns);
+    const column = index % columns;
+    const rowCount = Math.min(columns, visible - row * columns);
+    offsets.push({
+      x: (column - (rowCount - 1) / 2) * spacingX + ((row % 2) - 0.5) * 6,
+      y: -row * spacingY
+    });
   }
 
-  context.setLineDash([]);
+  return offsets;
+}
+
+function drawCrowd(centerX, baseY, count, color, countFill, scale = 1, isBoss = false) {
+  const offsets = formationOffsets(count);
+
+  for (let index = offsets.length - 1; index >= 0; index -= 1) {
+    const offset = offsets[index];
+    const depth = 1 - Math.min(0.45, Math.abs(offset.y) / 260);
+    drawStickFigure(centerX + offset.x * scale, baseY + offset.y * scale, scale * depth, color);
+  }
+
+  if (isBoss) {
+    drawStickFigure(centerX, baseY - 40 * scale, scale * 2.4, color, "rgba(76,5,25,0.3)");
+  }
+
+  drawBubble(centerX, baseY - 14 * scale, count, countFill);
 }
 
 function drawSquad() {
-  const centerX = laneCenter(state.lane);
-  const baseY = canvas.height * PLAYER_Y;
-  const visibleMembers = Math.min(state.squadSize, 15);
-  const columns = 5;
-
-  context.fillStyle = "#67e8f9";
-  context.strokeStyle = "#052f3a";
-  context.lineWidth = 3;
-
-  for (let index = 0; index < visibleMembers; index += 1) {
-    const column = index % columns;
-    const row = Math.floor(index / columns);
-    const x = centerX + (column - 2) * 18;
-    const y = baseY - row * 20;
-
-    context.beginPath();
-    context.arc(x, y, 8, 0, Math.PI * 2);
-    context.fill();
-    context.stroke();
-  }
-
-  context.fillStyle = "#f8fafc";
-  context.font = "700 18px system-ui, sans-serif";
-  context.textAlign = "center";
-  context.fillText(String(state.squadSize), centerX, baseY + 36);
-}
-
-function drawBullets() {
-  context.fillStyle = "#fef08a";
-
-  for (const bullet of state.bullets) {
-    const x = laneCenter(bullet.lane);
-    const y = bullet.y * canvas.height;
-    context.beginPath();
-    context.roundRect(x - 5, y - 15, 10, 22, 5);
-    context.fill();
-  }
+  const point = worldToCanvas(state.playerX, PLAYER_Y);
+  drawCrowd(point.x, point.y, state.squadSize, "#38c9f5", "#16aee5", point.scale);
 }
 
 function drawEnemies() {
-  for (const enemy of state.enemies) {
-    const x = laneCenter(enemy.lane);
-    const y = enemy.y * canvas.height;
-    const healthRatio = Math.max(0, enemy.health / enemy.maxHealth);
+  const enemies = [...state.enemies].sort((a, b) => a.y - b.y);
 
-    context.fillStyle = "#fb7185";
-    context.strokeStyle = "#4c0519";
-    context.lineWidth = 3;
-    context.beginPath();
-    context.roundRect(x - 24, y - 24, 48, 48, 10);
-    context.fill();
-    context.stroke();
+  for (const enemy of enemies) {
+    const point = worldToCanvas(enemy.x, enemy.y);
+    const color = enemy.type === "archer" ? "#f97316" : "#ef3026";
+    drawCrowd(point.x, point.y, enemy.count, color, "#ef3026", point.scale, enemy.type === "boss");
 
-    context.fillStyle = "#0f172a";
-    context.fillRect(x - 22, y - 34, 44, 6);
-    context.fillStyle = "#22c55e";
-    context.fillRect(x - 22, y - 34, 44 * healthRatio, 6);
+    if (enemy.type === "archer") {
+      context.strokeStyle = "#7c2d12";
+      context.lineWidth = 2.5 * point.scale;
+      context.beginPath();
+      context.arc(point.x + 18 * point.scale, point.y - 3 * point.scale, 10 * point.scale, -1.25, 1.25);
+      context.stroke();
+    }
   }
 }
 
@@ -127,43 +268,58 @@ function gateLabel(gate) {
 }
 
 function drawGates() {
+  const pairs = new Map();
   for (const gate of state.gates) {
-    const x = laneCenter(gate.lane);
-    const y = gate.y * canvas.height;
-    const isPositive = gate.operation === "+" || gate.operation === "x" || gate.operation === "*";
+    const key = Math.round(gate.y * 1000);
+    pairs.set(key, [...(pairs.get(key) ?? []), gate]);
+  }
 
-    context.fillStyle = isPositive ? "#22c55e" : "#ef4444";
-    context.strokeStyle = isPositive ? "#14532d" : "#7f1d1d";
-    context.lineWidth = 3;
+  for (const gates of pairs.values()) {
+    const y = worldYToCanvas(gates[0].y);
+    const leftX = worldXToCanvas(0.31, gates[0].y);
+    const rightX = worldXToCanvas(0.69, gates[0].y);
+    const centerX = (leftX + rightX) / 2;
+    const height = 52 * (0.62 + gates[0].y * 0.65);
+
+    context.fillStyle = "rgba(34, 211, 238, 0.72)";
+    context.fillRect(leftX - 90, y - height / 2, rightX - leftX + 180, height);
+    context.strokeStyle = "rgba(14, 116, 144, 0.55)";
+    context.lineWidth = 4;
     context.beginPath();
-    context.roundRect(x - 42, y - 24, 84, 48, 8);
-    context.fill();
+    context.moveTo(centerX, y - height / 2 - 12);
+    context.lineTo(centerX, y + height / 2 + 12);
     context.stroke();
 
-    context.fillStyle = "#f8fafc";
-    context.font = "800 24px system-ui, sans-serif";
-    context.textAlign = "center";
-    context.fillText(gateLabel(gate), x, y + 8);
+    for (const gate of gates) {
+      const x = worldXToCanvas(gate.x, gate.y);
+      const positive = gate.operation === "+" || gate.operation === "x" || gate.operation === "*";
+      context.fillStyle = positive ? "#ffffff" : "#fee2e2";
+      context.strokeStyle = positive ? "#67e8f9" : "#fb7185";
+      context.lineWidth = 4;
+      context.font = "900 34px system-ui, sans-serif";
+      context.textAlign = "center";
+      context.strokeText(gateLabel(gate), x, y + 12);
+      context.fillText(gateLabel(gate), x, y + 12);
+    }
   }
 }
 
-function drawPickups() {
-  for (const pickup of state.pickups) {
-    const x = laneCenter(pickup.lane);
-    const y = pickup.y * canvas.height;
-
-    context.fillStyle = "#a78bfa";
-    context.strokeStyle = "#4c1d95";
-    context.lineWidth = 3;
+function drawArrows() {
+  for (const arrow of state.arrows) {
+    const point = worldToCanvas(arrow.x, arrow.y);
+    context.strokeStyle = "#7c2d12";
+    context.fillStyle = "#facc15";
+    context.lineWidth = 3 * point.scale;
     context.beginPath();
-    context.arc(x, y, 20, 0, Math.PI * 2);
-    context.fill();
+    context.moveTo(point.x, point.y - 18 * point.scale);
+    context.lineTo(point.x, point.y + 18 * point.scale);
     context.stroke();
-
-    context.fillStyle = "#f8fafc";
-    context.font = "800 18px system-ui, sans-serif";
-    context.textAlign = "center";
-    context.fillText(`+${pickup.value}`, x, y + 6);
+    context.beginPath();
+    context.moveTo(point.x, point.y + 24 * point.scale);
+    context.lineTo(point.x - 6 * point.scale, point.y + 10 * point.scale);
+    context.lineTo(point.x + 6 * point.scale, point.y + 10 * point.scale);
+    context.closePath();
+    context.fill();
   }
 }
 
@@ -172,14 +328,14 @@ function drawOverlay() {
     return;
   }
 
-  context.fillStyle = "rgba(2, 6, 23, 0.72)";
+  context.fillStyle = "rgba(2, 6, 23, 0.66)";
   context.fillRect(0, 0, canvas.width, canvas.height);
   context.fillStyle = "#f8fafc";
-  context.font = "800 38px system-ui, sans-serif";
+  context.font = "900 40px system-ui, sans-serif";
   context.textAlign = "center";
-  context.fillText("Game Over", canvas.width / 2, canvas.height / 2 - 12);
-  context.font = "700 18px system-ui, sans-serif";
-  context.fillText("Press Restart", canvas.width / 2, canvas.height / 2 + 26);
+  context.fillText("Game Over", canvas.width / 2, canvas.height / 2 - 18);
+  context.font = "800 18px system-ui, sans-serif";
+  context.fillText("Click, tap, or press Enter to restart", canvas.width / 2, canvas.height / 2 + 22);
 }
 
 function updateHud() {
@@ -189,18 +345,16 @@ function updateHud() {
 }
 
 function resetRun() {
+  heldDirections.clear();
   state = resetState();
   lastFrame = performance.now();
   render();
 }
 
-function move(direction) {
-  if (state.status !== "running") {
-    return;
-  }
-
-  state = moveLane(state, direction);
-  render();
+function canvasToPlayerX(clientX) {
+  const rect = canvas.getBoundingClientRect();
+  const ratio = (clientX - rect.left) / rect.width;
+  return TRACK_MIN_X + ratio * (TRACK_MAX_X - TRACK_MIN_X);
 }
 
 function frame(now) {
@@ -213,32 +367,94 @@ function frame(now) {
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "ArrowLeft" || event.key.toLowerCase() === "a") {
-    move(-1);
+    heldDirections.add("left");
+    updateKeyboardInput();
   }
 
   if (event.key === "ArrowRight" || event.key.toLowerCase() === "d") {
-    move(1);
+    heldDirections.add("right");
+    updateKeyboardInput();
+  }
+
+  if ((event.key === "Enter" || event.key === " ") && state.status === "game-over") {
+    resetRun();
   }
 });
 
-canvas.addEventListener("touchstart", (event) => {
-  touchStartX = event.changedTouches[0].clientX;
+document.addEventListener("keyup", (event) => {
+  if (event.key === "ArrowLeft" || event.key.toLowerCase() === "a") {
+    heldDirections.delete("left");
+    updateKeyboardInput();
+  }
+
+  if (event.key === "ArrowRight" || event.key.toLowerCase() === "d") {
+    heldDirections.delete("right");
+    updateKeyboardInput();
+  }
 });
 
-canvas.addEventListener("touchend", (event) => {
-  if (touchStartX === null) {
+canvas.addEventListener("pointerdown", (event) => {
+  if (state.status === "game-over") {
+    resetRun();
     return;
   }
 
-  const deltaX = event.changedTouches[0].clientX - touchStartX;
-  if (Math.abs(deltaX) > 24) {
-    move(deltaX < 0 ? -1 : 1);
-  }
-  touchStartX = null;
+  pointerActive = true;
+  canvas.setPointerCapture(event.pointerId);
+  state = setPlayerX(state, canvasToPlayerX(event.clientX));
 });
 
-leftButton.addEventListener("click", () => move(-1));
-rightButton.addEventListener("click", () => move(1));
+canvas.addEventListener("pointermove", (event) => {
+  if (!pointerActive || state.status !== "running") {
+    return;
+  }
+
+  state = setPlayerX(state, canvasToPlayerX(event.clientX));
+});
+
+canvas.addEventListener("pointerup", (event) => {
+  pointerActive = false;
+  if (canvas.hasPointerCapture(event.pointerId)) {
+    canvas.releasePointerCapture(event.pointerId);
+  }
+});
+
+canvas.addEventListener("click", () => {
+  if (state.status === "game-over") {
+    resetRun();
+  }
+});
+
+leftButton.addEventListener("pointerdown", () => {
+  state = setInputX(state, -1);
+});
+rightButton.addEventListener("pointerdown", () => {
+  state = setInputX(state, 1);
+});
+leftButton.addEventListener("pointerup", () => {
+  state = setInputX(state, 0);
+});
+rightButton.addEventListener("pointerup", () => {
+  state = setInputX(state, 0);
+});
+leftButton.addEventListener("pointerleave", () => {
+  state = setInputX(state, 0);
+});
+rightButton.addEventListener("pointerleave", () => {
+  state = setInputX(state, 0);
+});
+leftButton.addEventListener("pointercancel", () => {
+  state = setInputX(state, 0);
+});
+rightButton.addEventListener("pointercancel", () => {
+  state = setInputX(state, 0);
+});
+leftButton.addEventListener("click", () => {
+  state = movePlayer(state, -1, 0.16);
+});
+rightButton.addEventListener("click", () => {
+  state = movePlayer(state, 1, 0.16);
+});
 restartButton.addEventListener("click", resetRun);
 
 render();

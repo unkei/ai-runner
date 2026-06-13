@@ -1,14 +1,14 @@
 # ai-runner
 
-A lightweight browser game prototype for a 3-lane auto-shooter runner.
+A lightweight browser game prototype for a crowd-clash runner.
 
 ## Gameplay
 
-- Move between three lanes with `ArrowLeft`/`ArrowRight`, `A`/`D`, swipe, or the on-screen buttons.
-- The squad fires automatically in the current lane.
-- Enemies approach from the front, take bullet damage, and reduce squad size on contact.
-- Gates apply `+`, `-`, `x`, `*`, and `/` squad operations when collected in the current lane.
-- Pickups add squad members.
+- Move freely left and right with `ArrowLeft`/`ArrowRight`, `A`/`D`, drag/touch, or the on-screen buttons.
+- The squad does not shoot. Crowd groups collide one-for-one, and both sides lose the same number of characters.
+- Gates appear as two side-by-side choices and apply `+`, `-`, `x`, `*`, and `/` squad operations.
+- Later stages introduce archers that fire arrows.
+- The final stretch introduces a large boss that requires dozens of squad members to cancel out.
 - The run ends when squad size reaches `0`; Restart starts a fresh run.
 
 ## Run
@@ -45,4 +45,4 @@ If you used the fallback port, open http://127.0.0.1:4174/tests.html instead.
 - Browser test harness reports all tests passing.
 - Desktop smoke at 1280x720 has no console errors.
 - Mobile smoke at 390x844 has no horizontal overflow.
-- Restart returns squad size to `5`.
+- Restart returns squad size to the initial value.
