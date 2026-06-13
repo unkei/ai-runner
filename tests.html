@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>3-Lane Runner Tests</title>
+    <link rel="stylesheet" href="./src/styles.css">
+  </head>
+  <body>
+    <main class="test-shell">
+      <h1>State Tests</h1>
+      <pre id="result">Running...</pre>
+    </main>
+
+    <script type="module">
+      import { runTests } from "./src/tests.js";
+
+      const result = document.querySelector("#result");
+
+      try {
+        const count = runTests();
+        result.textContent = `${count} tests passed`;
+        result.dataset.status = "pass";
+      } catch (error) {
+        result.textContent = error instanceof Error ? error.message : String(error);
+        result.dataset.status = "fail";
+      }
+    </script>
+  </body>
+</html>
