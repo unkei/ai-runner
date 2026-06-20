@@ -234,9 +234,14 @@ function drawEnemies() {
 
   for (const enemy of enemies) {
     const point = worldToCanvas(enemy.x, enemy.y);
-    const color = enemy.type === "archer" ? "#f97316" : "#ef3026";
-    const scale = enemy.type === "boss" ? point.scale * 2.2 : point.scale * 0.88;
-    drawStickFigure(point.x, point.y, scale, color, enemy.type === "boss" ? "#7f1d1d" : "#991b1b");
+    const color = enemy.type === "archer" ? "#f97316" : enemy.type === "midboss" ? "#a855f7" : "#ef3026";
+    const scale = enemy.type === "boss"
+      ? point.scale * 2.2
+      : enemy.type === "midboss"
+        ? point.scale * 1.5
+        : point.scale * 0.88;
+    const stroke = enemy.type === "boss" ? "#7f1d1d" : enemy.type === "midboss" ? "#581c87" : "#991b1b";
+    drawStickFigure(point.x, point.y, scale, color, stroke);
 
     if (enemy.maxHp > 1) {
       drawBubble(point.x, point.y - 22 * scale, `${enemy.hp}/${enemy.maxHp}`, "#be123c");

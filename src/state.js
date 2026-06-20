@@ -7,7 +7,7 @@ export const PLAYER_SPEED = 0.88;
 export const TRACK_MIN_X = 0.12;
 export const TRACK_MAX_X = 0.88;
 export const ENEMY_BASE_SPEED = 0.15;
-export const ENEMY_SPAWN_INTERVAL_SECONDS = 2.2;
+export const ENEMY_SPAWN_INTERVAL_SECONDS = 1.45;
 export const GATE_SPAWN_INTERVAL_SECONDS = 3.25;
 export const ALLY_FIRE_INTERVAL = 0.72;
 export const ALLY_FIRE_RANGE = 1.2;
@@ -15,6 +15,7 @@ export const ALLY_BULLET_SPEED = 1.35;
 export const ENEMY_PROJECTILE_SPEED = 0.82;
 export const ARCHER_STAGE = 2;
 export const BOSS_STAGE = 4;
+export const MIDBOSS_WAVE_INTERVAL = 4;
 export const STAGE_DISTANCE = 260;
 export const CONTACT_RADIUS = 0.038;
 export const GATE_COLLECT_RADIUS_Y = 0.065;
@@ -102,7 +103,8 @@ export function createAlly(id, index = 0) {
     hp: 1,
     maxHp: 1,
     targetEnemyId: null,
-    fireCooldown: 0.12 + (index % 5) * 0.065
+    shotsFired: 0,
+    fireCooldown: 0.08 + ((id * 29 + index * 17) % 67) / 100
   };
 }
 
@@ -127,9 +129,10 @@ export function createInitialState() {
     elapsed: 0,
     stage: 1,
     nextId: INITIAL_SQUAD_SIZE + 1,
-    enemySpawnCooldown: 1.1,
+    enemySpawnCooldown: 0.7,
     gateSpawnCooldown: 1.5,
     bossSpawned: false,
+    enemyWavesSpawned: 0,
     enemies: [],
     gates: [],
     allyBullets: [],
@@ -232,17 +235,18 @@ export function spawnGatePair(state, random = Math.random) {
 export function createEnemy(state, x = 0.5, type = "grunt", options = {}) {
   const stage = currentStage(state.distance);
   const isBoss = type === "boss";
-  const hp = isBoss ? 28 + stage * 6 : 1;
+  const isMidboss = type === "midboss";
+  const hp = isBoss ? 28 + stage * 6 : isMidboss ? 7 + stage * 2 : 1;
   return {
     id: options.id ?? state.nextId,
     waveId: options.waveId ?? state.nextId,
     type,
     x: clampPlayerX(x),
-    y: options.y ?? (isBoss ? -0.16 : -0.08),
+    y: options.y ?? (isBoss ? -0.16 : isMidboss ? -0.13 : -0.08),
     hp,
     maxHp: hp,
     targetAllyId: null,
-    moveSpeed: isBoss ? 0.08 : ENEMY_BASE_SPEED + stage * 0.012,
+    moveSpeed: isBoss ? 0.08 : isMidboss ? 0.105 : ENEMY_BASE_SPEED + stage * 0.012,
     attackRange: type === "archer" ? 0.34 : 0,
     attackCooldown: type === "archer" ? 0.9 + ((options.id ?? state.nextId) % 4) * 0.1 : Number.POSITIVE_INFINITY
   };
@@ -262,18 +266,22 @@ export function spawnEnemy(state, x = 0.5, type = "grunt") {
 export function spawnEnemyWave(state, x = 0.5, type = "grunt", count) {
   if (state.status !== "running") return state;
   const stage = currentStage(state.distance);
-  const enemyCount = type === "boss" ? 1 : clampInteger(count ?? 3 + stage, 1, 9);
+  const isHeavy = type === "boss" || type === "midboss";
+  const enemyCount = isHeavy ? 1 : clampInteger(count ?? 6 + stage * 2, 1, 18);
   const waveId = state.nextId;
   const enemies = [];
 
   for (let index = 0; index < enemyCount; index += 1) {
-    const column = index % 5;
-    const row = Math.floor(index / 5);
-    const offsetX = (column - (Math.min(5, enemyCount) - 1) / 2) * 0.055;
+    const columns = Math.min(6, enemyCount);
+    const column = index % columns;
+    const row = Math.floor(index / columns);
+    const rowStart = row * columns;
+    const rowCount = Math.min(columns, enemyCount - rowStart);
+    const offsetX = (column - (rowCount - 1) / 2) * 0.065;
     enemies.push(createEnemy(state, x + offsetX, type, {
       id: state.nextId + index,
       waveId,
-      y: (type === "boss" ? -0.16 : -0.08) - row * 0.045
+      y: (type === "boss" ? -0.16 : type === "midboss" ? -0.13 : -0.08) - row * 0.045
     }));
   }
 
@@ -336,10 +344,12 @@ export function resolveAllyFiring(state) {
     if (ally.fireCooldown > 0) return { ...ally, targetEnemyId: target.id };
     bullets.push(createAllyBullet(nextId, ally, target));
     nextId += 1;
+    const shotsFired = ally.shotsFired + 1;
     return {
       ...ally,
       targetEnemyId: target.id,
-      fireCooldown: ALLY_FIRE_INTERVAL + (ally.id % 4) * 0.035
+      shotsFired,
+      fireCooldown: 0.52 + ((ally.id * 37 + shotsFired * 53) % 47) / 100
     };
   });
   return { ...state, allies, allyBullets: bullets, nextId };
@@ -386,6 +396,7 @@ function advanceProjectile(projectile, target, deltaSeconds) {
 
 function enemyScore(enemy) {
   if (enemy.type === "boss") return 120;
+  if (enemy.type === "midboss") return 24;
   if (enemy.type === "archer") return 6;
   return 4;
 }
@@ -559,10 +570,15 @@ export function tickGame(state, deltaSeconds, random = Math.random) {
 
   while (nextState.enemySpawnCooldown <= 0) {
     const type = nextState.stage >= ARCHER_STAGE && random() > 0.62 ? "archer" : "grunt";
+    const enemyWavesSpawned = nextState.enemyWavesSpawned + 1;
     nextState = spawnEnemyWave({
       ...nextState,
-      enemySpawnCooldown: nextState.enemySpawnCooldown + Math.max(1.2, ENEMY_SPAWN_INTERVAL_SECONDS - nextState.stage * 0.16)
+      enemyWavesSpawned,
+      enemySpawnCooldown: nextState.enemySpawnCooldown + Math.max(0.8, ENEMY_SPAWN_INTERVAL_SECONDS - nextState.stage * 0.12)
     }, 0.24 + random() * 0.52, type);
+    if (enemyWavesSpawned % MIDBOSS_WAVE_INTERVAL === 0) {
+      nextState = spawnEnemyWave(nextState, 0.5, "midboss", 1);
+    }
   }
 
   if (nextState.stage >= BOSS_STAGE && !nextState.bossSpawned) {
