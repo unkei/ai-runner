@@ -9,16 +9,18 @@ export const TRACK_MAX_X = 0.88;
 export const ENEMY_BASE_SPEED = 0.15;
 export const ENEMY_SPAWN_INTERVAL_SECONDS = 1.45;
 export const GATE_SPAWN_INTERVAL_SECONDS = 3.25;
+export const GATE_LOOKAHEAD_DISTANCE = 96;
 export const ALLY_FIRE_INTERVAL = 0.72;
 export const ALLY_FIRE_RANGE = 1.2;
 export const ALLY_BULLET_SPEED = 1.35;
+export const ALLY_BULLET_LIFETIME = 1.6;
+export const ALLY_BULLET_HIT_RADIUS = 0.018;
 export const ENEMY_PROJECTILE_SPEED = 0.82;
 export const ARCHER_STAGE = 2;
 export const BOSS_STAGE = 4;
 export const MIDBOSS_WAVE_INTERVAL = 4;
 export const STAGE_DISTANCE = 260;
 export const CONTACT_RADIUS = 0.038;
-export const GATE_COLLECT_RADIUS_Y = 0.065;
 
 export function clamp(value, min, max) {
   const numericValue = Number(value);
@@ -217,13 +219,21 @@ export function chooseGatePair(random = Math.random) {
 }
 
 export function createGatePair(state, random = Math.random) {
+  const pairId = state.nextId;
+  const worldDistance = state.distance + GATE_LOOKAHEAD_DISTANCE;
   return chooseGatePair(random).map((gate, index) => ({
     id: state.nextId + index,
-    y: -0.08,
-    speed: 0.24,
+    pairId,
+    worldDistance,
     width: 0.34,
     ...gate
   }));
+}
+
+export function projectGateY(worldDistance, playerDistance) {
+  const relativeDistance = worldDistance - playerDistance;
+  const progress = 1 - relativeDistance / GATE_LOOKAHEAD_DISTANCE;
+  return -0.08 + clamp(progress, 0, 1) * (PLAYER_Y + 0.08);
 }
 
 export function spawnGatePair(state, random = Math.random) {
@@ -317,14 +327,20 @@ export function moveEnemiesIndependently(state, deltaSeconds) {
 }
 
 function createAllyBullet(id, ally, enemy) {
+  const dx = enemy.x - ally.x;
+  const dy = enemy.y - (ally.y - 0.012);
+  const distance = Math.hypot(dx, dy);
+  const directionX = distance > Number.EPSILON ? dx / distance : 0;
+  const directionY = distance > Number.EPSILON ? dy / distance : -1;
   return {
     id,
     sourceAllyId: ally.id,
-    targetEnemyId: enemy.id,
     x: ally.x,
     y: ally.y - 0.012,
-    speed: ALLY_BULLET_SPEED,
-    damage: 1
+    velocityX: directionX * ALLY_BULLET_SPEED,
+    velocityY: directionY * ALLY_BULLET_SPEED,
+    damage: 1,
+    remainingLifetime: ALLY_BULLET_LIFETIME
   };
 }
 
@@ -401,20 +417,64 @@ function enemyScore(enemy) {
   return 4;
 }
 
+function segmentCircleHitFraction(start, end, center, radius) {
+  const offsetX = start.x - center.x;
+  const offsetY = start.y - center.y;
+  if (offsetX * offsetX + offsetY * offsetY <= radius * radius) return 0;
+
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const a = dx * dx + dy * dy;
+  if (a <= Number.EPSILON) return null;
+  const b = 2 * (offsetX * dx + offsetY * dy);
+  const c = offsetX * offsetX + offsetY * offsetY - radius * radius;
+  const discriminant = b * b - 4 * a * c;
+  if (discriminant < 0) return null;
+
+  const squareRoot = Math.sqrt(discriminant);
+  const first = (-b - squareRoot) / (2 * a);
+  const second = (-b + squareRoot) / (2 * a);
+  if (first >= 0 && first <= 1) return first;
+  if (second >= 0 && second <= 1) return second;
+  return null;
+}
+
 export function resolveAllyProjectiles(state, deltaSeconds) {
   if (state.allyBullets.length === 0) return state;
-  const enemiesById = new Map(state.enemies.map((enemy) => [enemy.id, enemy]));
   const damageById = new Map();
   const movedBullets = [];
 
   for (const bullet of state.allyBullets) {
-    const target = enemiesById.get(bullet.targetEnemyId);
-    if (!target) continue;
-    const result = advanceProjectile(bullet, target, deltaSeconds);
-    if (result.hit) {
-      damageById.set(target.id, (damageById.get(target.id) ?? 0) + bullet.damage);
-    } else {
-      movedBullets.push(result.projectile);
+    const nextBullet = {
+      ...bullet,
+      x: bullet.x + bullet.velocityX * deltaSeconds,
+      y: bullet.y + bullet.velocityY * deltaSeconds,
+      remainingLifetime: bullet.remainingLifetime - deltaSeconds
+    };
+    let firstHit = null;
+    for (const enemy of state.enemies) {
+      const radius = enemy.type === "boss" ? ALLY_BULLET_HIT_RADIUS * 1.45 : ALLY_BULLET_HIT_RADIUS;
+      const hitFraction = segmentCircleHitFraction(bullet, nextBullet, enemy, radius);
+      if (hitFraction === null) continue;
+      if (
+        firstHit === null ||
+        hitFraction < firstHit.fraction - Number.EPSILON ||
+        (Math.abs(hitFraction - firstHit.fraction) <= Number.EPSILON && enemy.id < firstHit.enemy.id)
+      ) {
+        firstHit = { enemy, fraction: hitFraction };
+      }
+    }
+    if (firstHit) {
+      const enemy = firstHit.enemy;
+      damageById.set(enemy.id, (damageById.get(enemy.id) ?? 0) + bullet.damage);
+    } else if (
+      nextBullet.remainingLifetime > 0 &&
+      nextBullet.x >= TRACK_MIN_X - 0.12 &&
+      nextBullet.x <= TRACK_MAX_X + 0.12 &&
+      nextBullet.y >= -0.25 &&
+      nextBullet.y <= 1.05
+    ) {
+      movedBullets.push(nextBullet);
     }
   }
 
@@ -428,11 +488,10 @@ export function resolveAllyProjectiles(state, deltaSeconds) {
       enemies.push({ ...enemy, hp });
     }
   }
-  const aliveIds = new Set(enemies.map((enemy) => enemy.id));
   return {
     ...state,
     enemies,
-    allyBullets: movedBullets.filter((bullet) => aliveIds.has(bullet.targetEnemyId)),
+    allyBullets: movedBullets,
     killScore,
     score: Math.floor(state.distance) + killScore
   };
@@ -496,13 +555,12 @@ export function resolveCombatantContacts(state) {
   const allies = reflowAllies(state.allies.filter((ally) => !removedAllies.has(ally.id)), state.playerX);
   const enemies = state.enemies.filter((enemy) => !removedEnemies.has(enemy.id));
   const allyIds = new Set(allies.map((ally) => ally.id));
-  const enemyIds = new Set(enemies.map((enemy) => enemy.id));
   return {
     ...state,
     allies,
     enemies,
     squadSize: allies.length,
-    allyBullets: state.allyBullets.filter((bullet) => enemyIds.has(bullet.targetEnemyId)),
+    allyBullets: state.allyBullets,
     enemyProjectiles: state.enemyProjectiles.filter((projectile) => allyIds.has(projectile.targetAllyId)),
     killScore,
     score: Math.floor(state.distance) + killScore,
@@ -514,18 +572,19 @@ export function resolveGateContacts(state) {
   if (state.status !== "running") return state;
   let nextState = state;
   const remainingGates = [];
-  const gatesByPairKey = new Map();
+  const gatesByPairId = new Map();
   for (const gate of state.gates) {
-    const pairKey = Math.round(gate.y * 1000);
-    gatesByPairKey.set(pairKey, [...(gatesByPairKey.get(pairKey) ?? []), gate]);
+    gatesByPairId.set(gate.pairId, [...(gatesByPairId.get(gate.pairId) ?? []), gate]);
   }
-  for (const gates of gatesByPairKey.values()) {
-    const gateY = gates[0].y;
-    if (Math.abs(gateY - PLAYER_Y) <= GATE_COLLECT_RADIUS_Y) {
+  const orderedPairs = [...gatesByPairId.values()].sort((first, second) => (
+    first[0].worldDistance - second[0].worldDistance || first[0].pairId - second[0].pairId
+  ));
+  for (const gates of orderedPairs) {
+    if (gates[0].worldDistance <= state.distance) {
       const selectedSide = state.playerX <= 0.5 ? "left" : "right";
       const selectedGate = gates.find((gate) => gate.side === selectedSide) ?? gates[0];
       nextState = setSquadSize(nextState, applyGateOperation(nextState.allies.length, selectedGate));
-    } else if (gateY <= PLAYER_Y + GATE_COLLECT_RADIUS_Y) {
+    } else {
       remainingGates.push(...gates);
     }
   }
@@ -547,8 +606,6 @@ function moveWorldObjects(state, deltaSeconds) {
     allies: moved.allies.map((ally) => ({ ...ally, fireCooldown: ally.fireCooldown - deltaSeconds })),
     enemies: moved.enemies.map((enemy) => ({ ...enemy, attackCooldown: enemy.attackCooldown - deltaSeconds })),
     gates: moved.gates
-      .map((gate) => ({ ...gate, y: gate.y + gate.speed * deltaSeconds }))
-      .filter((gate) => gate.y < PLAYER_Y + GATE_COLLECT_RADIUS_Y)
   };
 }
 
