@@ -3,6 +3,7 @@ import {
   TRACK_MAX_X,
   TRACK_MIN_X,
   movePlayer,
+  projectGateY,
   resetState,
   setInputX,
   setPlayerX,
@@ -264,16 +265,16 @@ function gateLabel(gate) {
 function drawGates() {
   const pairs = new Map();
   for (const gate of state.gates) {
-    const key = Math.round(gate.y * 1000);
-    pairs.set(key, [...(pairs.get(key) ?? []), gate]);
+    pairs.set(gate.pairId, [...(pairs.get(gate.pairId) ?? []), gate]);
   }
 
   for (const gates of pairs.values()) {
-    const y = worldYToCanvas(gates[0].y);
-    const leftX = worldXToCanvas(0.31, gates[0].y);
-    const rightX = worldXToCanvas(0.69, gates[0].y);
+    const projectedY = projectGateY(gates[0].worldDistance, state.distance);
+    const y = worldYToCanvas(projectedY);
+    const leftX = worldXToCanvas(0.31, projectedY);
+    const rightX = worldXToCanvas(0.69, projectedY);
     const centerX = (leftX + rightX) / 2;
-    const height = 52 * (0.62 + gates[0].y * 0.65);
+    const height = 52 * (0.62 + projectedY * 0.65);
 
     context.fillStyle = "rgba(34, 211, 238, 0.72)";
     context.fillRect(leftX - 90, y - height / 2, rightX - leftX + 180, height);
@@ -285,7 +286,7 @@ function drawGates() {
     context.stroke();
 
     for (const gate of gates) {
-      const x = worldXToCanvas(gate.x, gate.y);
+      const x = worldXToCanvas(gate.x, projectedY);
       const positive = gate.operation === "+" || gate.operation === "x" || gate.operation === "*";
       context.fillStyle = positive ? "#ffffff" : "#fee2e2";
       context.strokeStyle = positive ? "#67e8f9" : "#fb7185";
@@ -301,15 +302,31 @@ function drawGates() {
 function drawProjectiles() {
   for (const bullet of state.allyBullets) {
     const point = worldToCanvas(bullet.x, bullet.y);
+    const forward = worldToCanvas(
+      bullet.x + bullet.velocityX * 0.03,
+      bullet.y + bullet.velocityY * 0.03
+    );
+    const directionX = forward.x - point.x;
+    const directionY = forward.y - point.y;
+    const directionLength = Math.hypot(directionX, directionY) || 1;
+    const unitX = directionX / directionLength;
+    const unitY = directionY / directionLength;
+    const halfLength = 8 * point.scale;
     context.strokeStyle = "#0369a1";
     context.fillStyle = "#fef08a";
     context.lineWidth = Math.max(2, 2.5 * point.scale);
     context.beginPath();
-    context.moveTo(point.x, point.y + 8 * point.scale);
-    context.lineTo(point.x, point.y - 8 * point.scale);
+    context.moveTo(point.x - unitX * halfLength, point.y - unitY * halfLength);
+    context.lineTo(point.x + unitX * halfLength, point.y + unitY * halfLength);
     context.stroke();
     context.beginPath();
-    context.arc(point.x, point.y - 8 * point.scale, Math.max(2.5, 3.5 * point.scale), 0, Math.PI * 2);
+    context.arc(
+      point.x + unitX * halfLength,
+      point.y + unitY * halfLength,
+      Math.max(2.5, 3.5 * point.scale),
+      0,
+      Math.PI * 2
+    );
     context.fill();
   }
 
