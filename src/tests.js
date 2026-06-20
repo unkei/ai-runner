@@ -40,6 +40,10 @@ function uniqueIds(entities) {
   return new Set(entities.map((entity) => entity.id)).size === entities.length;
 }
 
+function straightBullet(id, x, y, velocityX = 0, velocityY = -1) {
+  return { id, sourceAllyId: 1, x, y, velocityX, velocityY, damage: 1, remainingLifetime: 2 };
+}
+
 function testInitialStateCreatesIndependentAllies() {
   const state = createInitialState();
   assert(state.status === "running", "initial status should be running");
@@ -153,7 +157,7 @@ function testEveryFourthWaveAddsOneMidboss() {
 function testMidbossTakesMultipleHitsAndScoresOnce() {
   const base = createInitialState();
   const midboss = { ...createEnemy(base, 0.5, "midboss"), id: 88, x: 0.5, y: 0.5 };
-  const bullet = (id) => ({ id, sourceAllyId: 1, targetEnemyId: midboss.id, x: midboss.x, y: midboss.y, speed: 1, damage: 1 });
+  const bullet = (id) => straightBullet(id, midboss.x, midboss.y);
   let resolved = resolveAllyProjectiles({ ...base, enemies: [midboss], allyBullets: [bullet(60)] }, 0);
   assert(resolved.enemies[0].hp === midboss.hp - 1, "one hit should not defeat a midboss");
   resolved = resolveAllyProjectiles({
@@ -193,6 +197,8 @@ function testAlliesAcquireTargetsAndFireWithoutBeingConsumed() {
   assert(fired.allyBullets.length === 2, "each ready ally should fire its own bullet");
   assert(fired.allies.length === 2, "shooting should not consume allies");
   assert(fired.allies.every((ally) => ally.targetEnemyId !== null), "each shooter should retain a target id");
+  assert(fired.allyBullets.every((bullet) => Number.isFinite(bullet.velocityX) && bullet.velocityY < 0), "each bullet should capture a launch velocity");
+  assert(fired.allyBullets.every((bullet) => !("targetEnemyId" in bullet)), "fired bullets should not retain a homing target");
 }
 
 function testAllyFireTimingsStayStaggered() {
@@ -229,18 +235,68 @@ function testOneAllyCanDefeatMultipleEnemiesSequentially() {
   assert(state.allies.length === 1, "same ally should remain reusable");
 }
 
-function testOrphanedAllyBulletIsRemoved() {
+function testBulletKeepsLaunchDirectionAfterTargetMoves() {
+  let state = setSquadSize(createInitialState(), 1);
+  const ally = { ...state.allies[0], x: 0.5, fireCooldown: 0 };
+  const enemy = { ...createEnemy(state, 0.5), id: 70, x: 0.5, y: 0.3 };
+  state = resolveAllyFiring({ ...state, allies: [ally], enemies: [enemy], nextId: 100 });
+  const launched = state.allyBullets[0];
+  state = resolveAllyProjectiles({ ...state, enemies: [{ ...enemy, x: 0.75 }] }, 0.1);
+  const moved = state.allyBullets[0];
+  assert(moved.x === launched.x + launched.velocityX * 0.1, "moving target should not bend bullet x velocity");
+  assert(moved.y === launched.y + launched.velocityY * 0.1, "moving target should not bend bullet y velocity");
+  assert(moved.velocityX === launched.velocityX && moved.velocityY === launched.velocityY, "launch velocity should remain immutable");
+}
+
+function testBulletPersistsAfterOriginalTargetDisappears() {
   const state = {
     ...createInitialState(),
-    allyBullets: [{ id: 40, sourceAllyId: 1, targetEnemyId: 999, x: 0.5, y: 0.5, speed: 1, damage: 1 }]
+    enemies: [],
+    allyBullets: [straightBullet(40, 0.5, 0.5)]
   };
-  assert(resolveAllyProjectiles(state, 0.1).allyBullets.length === 0, "bullet without living target should be removed");
+  const resolved = resolveAllyProjectiles(state, 0.1);
+  assert(resolved.allyBullets.length === 1, "bullet should continue after its original target disappears");
+  assert(resolved.allyBullets[0].y === 0.4, "orphaned bullet should continue along its launch direction");
+}
+
+function testSweptBulletHitsFirstEnemyOnStraightPath() {
+  const base = createInitialState();
+  const near = { ...createEnemy(base, 0.5), id: 80, x: 0.5, y: 0.45 };
+  const far = { ...createEnemy(base, 0.5), id: 81, x: 0.5, y: 0.25 };
+  const resolved = resolveAllyProjectiles({
+    ...base,
+    enemies: [far, near],
+    allyBullets: [straightBullet(60, 0.5, 0.6)]
+  }, 0.5);
+  assert(resolved.enemies.some((enemy) => enemy.id === far.id), "one bullet should not pass through the first enemy");
+  assert(!resolved.enemies.some((enemy) => enemy.id === near.id), "swept collision should hit the first crossed enemy");
+  assert(resolved.allyBullets.length === 0, "bullet should be consumed by its first hit");
+}
+
+function testEqualDistanceBulletHitUsesEnemyId() {
+  const base = createInitialState();
+  const highId = { ...createEnemy(base, 0.5), id: 81, x: 0.5, y: 0.4 };
+  const lowId = { ...createEnemy(base, 0.5), id: 80, x: 0.5, y: 0.4 };
+  const resolved = resolveAllyProjectiles({
+    ...base,
+    enemies: [highId, lowId],
+    allyBullets: [straightBullet(60, 0.5, 0.6)]
+  }, 0.4);
+  assert(resolved.enemies.some((enemy) => enemy.id === highId.id), "equal-distance hit should leave the higher enemy id alive");
+  assert(!resolved.enemies.some((enemy) => enemy.id === lowId.id), "equal-distance hit should deterministically choose the lower enemy id");
+}
+
+function testBulletExpiresOutsideLifetime() {
+  const base = createInitialState();
+  const expired = { ...straightBullet(60, 0.5, 0.5), remainingLifetime: 0.05 };
+  const resolved = resolveAllyProjectiles({ ...base, allyBullets: [expired] }, 0.1);
+  assert(resolved.allyBullets.length === 0, "expired straight bullet should be removed");
 }
 
 function testOverkillScoresEnemyOnlyOnce() {
   const base = createInitialState();
   const enemy = { ...createEnemy(base, 0.5), id: 88, x: 0.5, y: 0.5 };
-  const bullet = (id) => ({ id, sourceAllyId: id, targetEnemyId: enemy.id, x: enemy.x, y: enemy.y, speed: 1, damage: 1 });
+  const bullet = (id) => straightBullet(id, enemy.x, enemy.y);
   const resolved = resolveAllyProjectiles({ ...base, enemies: [enemy], allyBullets: [bullet(60), bullet(61)] }, 0);
   assert(resolved.enemies.length === 0, "overkill should remove enemy");
   assert(resolved.killScore === 4, "overkill should score one normal enemy once");
@@ -371,7 +427,11 @@ export function runTests() {
     testAlliesAcquireTargetsAndFireWithoutBeingConsumed,
     testAllyFireTimingsStayStaggered,
     testOneAllyCanDefeatMultipleEnemiesSequentially,
-    testOrphanedAllyBulletIsRemoved,
+    testBulletKeepsLaunchDirectionAfterTargetMoves,
+    testBulletPersistsAfterOriginalTargetDisappears,
+    testSweptBulletHitsFirstEnemyOnStraightPath,
+    testEqualDistanceBulletHitUsesEnemyId,
+    testBulletExpiresOutsideLifetime,
     testOverkillScoresEnemyOnlyOnce,
     testArcherProjectileDamagesOnlyTargetAlly,
     testEnemyProjectileCanEndRun,
