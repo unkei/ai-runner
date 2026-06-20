@@ -16,17 +16,7 @@ The implementation remains a lightweight HTML/CSS/JavaScript app with determinis
 
 ## Delivery Rule
 
-For future feature work in this repository, use this workflow unless the user explicitly overrides it:
-
-1. Write or update an implementation specification plan first. Ask clarifying questions only when a reasonable implementation choice would be risky.
-2. Split work into coherent steps. For each step, create a `codex/...` branch.
-3. Use agents for implementation, review, and testing when the work is large enough to benefit from parallel checks.
-4. Commit the completed step.
-5. Push the branch and create a draft PR as soon as a branch has a meaningful commit.
-6. Add implementation, review, and test notes as PR comments.
-7. When validation is complete, mark the PR ready for review.
-8. Merge the PR into `main`.
-9. Repeat for the next step until the requested work is complete.
+Future work follows the repository-wide workflow in [`AGENTS.md`](../AGENTS.md). That workflow supersedes the delivery notes that originally accompanied this completed feature slice.
 
 ## Current Feature Slice
 
