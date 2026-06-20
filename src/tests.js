@@ -2,6 +2,7 @@ import {
   BOSS_STAGE,
   INITIAL_PLAYER_X,
   INITIAL_SQUAD_SIZE,
+  MIDBOSS_WAVE_INTERVAL,
   PLAYER_Y,
   STAGE_DISTANCE,
   TRACK_MAX_X,
@@ -126,6 +127,43 @@ function testEnemyWaveCreatesIndependentEntities() {
   assert(state.enemies.every((enemy) => enemy.hp === 1), "normal enemies should have individual hp");
 }
 
+function testDefaultEnemyWavesAreLargeFrontalFormations() {
+  const firstStage = spawnEnemyWave(createInitialState(), 0.5, "grunt");
+  assert(firstStage.enemies.length === 8, "first-stage wave should contain eight enemies");
+  assert(new Set(firstStage.enemies.map((enemy) => enemy.x)).size === 6, "large wave should span six frontal columns");
+  assert(new Set(firstStage.enemies.map((enemy) => enemy.y)).size === 2, "large wave should use multiple rows");
+  assert(firstStage.enemies.every((enemy) => enemy.x >= TRACK_MIN_X && enemy.x <= TRACK_MAX_X), "wave should remain on track");
+
+  const lateState = { ...createInitialState(), distance: STAGE_DISTANCE * 10 };
+  const lateWave = spawnEnemyWave(lateState, 0.5, "grunt");
+  assert(lateWave.enemies.length === 18, "large waves should cap at eighteen enemies");
+}
+
+function testEveryFourthWaveAddsOneMidboss() {
+  let state = { ...createInitialState(), enemySpawnCooldown: 0, gateSpawnCooldown: 10 };
+  for (let wave = 1; wave <= MIDBOSS_WAVE_INTERVAL; wave += 1) {
+    state = tickGame({ ...state, enemySpawnCooldown: 0 }, 0, () => 0);
+    const midbosses = state.enemies.filter((enemy) => enemy.type === "midboss");
+    assert(midbosses.length === (wave === MIDBOSS_WAVE_INTERVAL ? 1 : 0), "midboss cadence should be every fourth wave");
+  }
+  const midboss = state.enemies.find((enemy) => enemy.type === "midboss");
+  assert(midboss.hp === 9, "first-stage midboss should require nine hits");
+}
+
+function testMidbossTakesMultipleHitsAndScoresOnce() {
+  const base = createInitialState();
+  const midboss = { ...createEnemy(base, 0.5, "midboss"), id: 88, x: 0.5, y: 0.5 };
+  const bullet = (id) => ({ id, sourceAllyId: 1, targetEnemyId: midboss.id, x: midboss.x, y: midboss.y, speed: 1, damage: 1 });
+  let resolved = resolveAllyProjectiles({ ...base, enemies: [midboss], allyBullets: [bullet(60)] }, 0);
+  assert(resolved.enemies[0].hp === midboss.hp - 1, "one hit should not defeat a midboss");
+  resolved = resolveAllyProjectiles({
+    ...resolved,
+    allyBullets: Array.from({ length: resolved.enemies[0].hp }, (_, index) => bullet(70 + index))
+  }, 0);
+  assert(resolved.enemies.length === 0, "remaining hits should defeat the midboss");
+  assert(resolved.killScore === 24, "midboss defeat should score once");
+}
+
 function testEnemiesChooseAndMoveTowardDifferentAllies() {
   const base = setSquadSize(createInitialState(), 2);
   const allies = [
@@ -155,6 +193,20 @@ function testAlliesAcquireTargetsAndFireWithoutBeingConsumed() {
   assert(fired.allyBullets.length === 2, "each ready ally should fire its own bullet");
   assert(fired.allies.length === 2, "shooting should not consume allies");
   assert(fired.allies.every((ally) => ally.targetEnemyId !== null), "each shooter should retain a target id");
+}
+
+function testAllyFireTimingsStayStaggered() {
+  let state = createInitialState();
+  assert(new Set(state.allies.map((ally) => ally.fireCooldown)).size > 4, "initial firing times should be broadly staggered");
+  state = {
+    ...state,
+    allies: state.allies.map((ally) => ({ ...ally, fireCooldown: 0 })),
+    enemies: [{ ...createEnemy(state, 0.5), id: 80, x: 0.5, y: 0.3 }],
+    nextId: 100
+  };
+  const fired = resolveAllyFiring(state);
+  assert(fired.allies.every((ally) => ally.shotsFired === 1), "each firing ally should track its shot count");
+  assert(new Set(fired.allies.map((ally) => ally.fireCooldown)).size > 4, "repeat firing times should remain staggered");
 }
 
 function testOneAllyCanDefeatMultipleEnemiesSequentially() {
@@ -312,8 +364,12 @@ export function runTests() {
     testGateContactMutatesAllyEntities,
     testSpawnGatePairCreatesTwoChoices,
     testEnemyWaveCreatesIndependentEntities,
+    testDefaultEnemyWavesAreLargeFrontalFormations,
+    testEveryFourthWaveAddsOneMidboss,
+    testMidbossTakesMultipleHitsAndScoresOnce,
     testEnemiesChooseAndMoveTowardDifferentAllies,
     testAlliesAcquireTargetsAndFireWithoutBeingConsumed,
+    testAllyFireTimingsStayStaggered,
     testOneAllyCanDefeatMultipleEnemiesSequentially,
     testOrphanedAllyBulletIsRemoved,
     testOverkillScoresEnemyOnlyOnce,
