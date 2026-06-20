@@ -53,7 +53,7 @@ function render() {
   drawTrack();
   drawProgress();
   drawGates();
-  drawArrows();
+  drawProjectiles();
   drawEnemies();
   drawSquad();
   drawOverlay();
@@ -204,45 +204,29 @@ function drawStickFigure(x, y, scale, fill, stroke = "rgba(15,23,42,0.14)") {
   context.stroke();
 }
 
-function formationOffsets(count) {
-  const visible = Math.min(count, 72);
-  const offsets = [];
-  const columns = Math.ceil(Math.sqrt(visible * 1.45));
-  const spacingX = 17;
-  const spacingY = 17;
-
-  for (let index = 0; index < visible; index += 1) {
-    const row = Math.floor(index / columns);
-    const column = index % columns;
-    const rowCount = Math.min(columns, visible - row * columns);
-    offsets.push({
-      x: (column - (rowCount - 1) / 2) * spacingX + ((row % 2) - 0.5) * 6,
-      y: -row * spacingY
-    });
-  }
-
-  return offsets;
-}
-
-function drawCrowd(centerX, baseY, count, color, countFill, scale = 1, isBoss = false) {
-  const offsets = formationOffsets(count);
-
-  for (let index = offsets.length - 1; index >= 0; index -= 1) {
-    const offset = offsets[index];
-    const depth = 1 - Math.min(0.45, Math.abs(offset.y) / 260);
-    drawStickFigure(centerX + offset.x * scale, baseY + offset.y * scale, scale * depth, color);
-  }
-
-  if (isBoss) {
-    drawStickFigure(centerX, baseY - 40 * scale, scale * 2.4, color, "rgba(76,5,25,0.3)");
-  }
-
-  drawBubble(centerX, baseY - 14 * scale, count, countFill);
+function drawGun(point, target, scale) {
+  const targetPoint = target ? worldToCanvas(target.x, target.y) : { x: point.x, y: point.y - 40 };
+  const angle = Math.atan2(targetPoint.y - point.y, targetPoint.x - point.x);
+  const startX = point.x + Math.cos(angle) * 7 * scale;
+  const startY = point.y + 13 * scale + Math.sin(angle) * 7 * scale;
+  context.strokeStyle = "#0f3f59";
+  context.lineWidth = Math.max(2.5, 4 * scale);
+  context.beginPath();
+  context.moveTo(startX, startY);
+  context.lineTo(startX + Math.cos(angle) * 15 * scale, startY + Math.sin(angle) * 15 * scale);
+  context.stroke();
 }
 
 function drawSquad() {
-  const point = worldToCanvas(state.playerX, PLAYER_Y);
-  drawCrowd(point.x, point.y, state.squadSize, "#38c9f5", "#16aee5", point.scale);
+  const enemiesById = new Map(state.enemies.map((enemy) => [enemy.id, enemy]));
+  const allies = [...state.allies].sort((a, b) => a.y - b.y || a.id - b.id);
+  for (const ally of allies) {
+    const point = worldToCanvas(ally.x, ally.y);
+    drawStickFigure(point.x, point.y, point.scale * 0.82, "#38c9f5", "#075985");
+    drawGun(point, enemiesById.get(ally.targetEnemyId), point.scale * 0.82);
+  }
+  const center = worldToCanvas(state.playerX, PLAYER_Y);
+  drawBubble(center.x, center.y - 12, state.allies.length, "#16aee5");
 }
 
 function drawEnemies() {
@@ -251,7 +235,12 @@ function drawEnemies() {
   for (const enemy of enemies) {
     const point = worldToCanvas(enemy.x, enemy.y);
     const color = enemy.type === "archer" ? "#f97316" : "#ef3026";
-    drawCrowd(point.x, point.y, enemy.count, color, "#ef3026", point.scale, enemy.type === "boss");
+    const scale = enemy.type === "boss" ? point.scale * 2.2 : point.scale * 0.88;
+    drawStickFigure(point.x, point.y, scale, color, enemy.type === "boss" ? "#7f1d1d" : "#991b1b");
+
+    if (enemy.maxHp > 1) {
+      drawBubble(point.x, point.y - 22 * scale, `${enemy.hp}/${enemy.maxHp}`, "#be123c");
+    }
 
     if (enemy.type === "archer") {
       context.strokeStyle = "#7c2d12";
@@ -304,11 +293,25 @@ function drawGates() {
   }
 }
 
-function drawArrows() {
-  for (const arrow of state.arrows) {
-    const point = worldToCanvas(arrow.x, arrow.y);
+function drawProjectiles() {
+  for (const bullet of state.allyBullets) {
+    const point = worldToCanvas(bullet.x, bullet.y);
+    context.strokeStyle = "#0369a1";
+    context.fillStyle = "#fef08a";
+    context.lineWidth = Math.max(2, 2.5 * point.scale);
+    context.beginPath();
+    context.moveTo(point.x, point.y + 8 * point.scale);
+    context.lineTo(point.x, point.y - 8 * point.scale);
+    context.stroke();
+    context.beginPath();
+    context.arc(point.x, point.y - 8 * point.scale, Math.max(2.5, 3.5 * point.scale), 0, Math.PI * 2);
+    context.fill();
+  }
+
+  for (const projectile of state.enemyProjectiles) {
+    const point = worldToCanvas(projectile.x, projectile.y);
     context.strokeStyle = "#7c2d12";
-    context.fillStyle = "#facc15";
+    context.fillStyle = "#fb923c";
     context.lineWidth = 3 * point.scale;
     context.beginPath();
     context.moveTo(point.x, point.y - 18 * point.scale);
