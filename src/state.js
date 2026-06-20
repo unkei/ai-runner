@@ -6,25 +6,24 @@ export const PLAYER_Y = 0.84;
 export const PLAYER_SPEED = 0.88;
 export const TRACK_MIN_X = 0.12;
 export const TRACK_MAX_X = 0.88;
-export const ENEMY_BASE_SPEED = 0.16;
+export const ENEMY_BASE_SPEED = 0.15;
 export const ENEMY_SPAWN_INTERVAL_SECONDS = 2.2;
 export const GATE_SPAWN_INTERVAL_SECONDS = 3.25;
-export const ARROW_SPEED = 0.72;
-export const ARROW_DAMAGE = 1;
+export const ALLY_FIRE_INTERVAL = 0.72;
+export const ALLY_FIRE_RANGE = 1.2;
+export const ALLY_BULLET_SPEED = 1.35;
+export const ENEMY_PROJECTILE_SPEED = 0.82;
 export const ARCHER_STAGE = 2;
 export const BOSS_STAGE = 4;
 export const STAGE_DISTANCE = 260;
-export const CONTACT_RADIUS_X = 0.14;
-export const CONTACT_RADIUS_Y = 0.065;
+export const CONTACT_RADIUS = 0.038;
 export const GATE_COLLECT_RADIUS_Y = 0.065;
 
 export function clamp(value, min, max) {
   const numericValue = Number(value);
-
   if (!Number.isFinite(numericValue)) {
     return min;
   }
-
   return Math.min(max, Math.max(min, numericValue));
 }
 
@@ -44,24 +43,97 @@ export function currentStage(distance) {
   return Math.max(1, Math.floor(distance / STAGE_DISTANCE) + 1);
 }
 
+function distanceSquared(first, second) {
+  const dx = first.x - second.x;
+  const dy = first.y - second.y;
+  return dx * dx + dy * dy;
+}
+
+function nearestEntity(source, candidates) {
+  let nearest = null;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+
+  for (const candidate of candidates) {
+    const candidateDistance = distanceSquared(source, candidate);
+    if (
+      candidateDistance < nearestDistance - Number.EPSILON ||
+      (Math.abs(candidateDistance - nearestDistance) <= Number.EPSILON && candidate.id < (nearest?.id ?? Number.POSITIVE_INFINITY))
+    ) {
+      nearest = candidate;
+      nearestDistance = candidateDistance;
+    }
+  }
+
+  return nearest;
+}
+
+function formationOffset(index, count) {
+  const columns = Math.max(1, Math.ceil(Math.sqrt(Math.max(1, count) * 1.45)));
+  const row = Math.floor(index / columns);
+  const column = index % columns;
+  const rowCount = Math.min(columns, count - row * columns);
+  return {
+    x: (column - (rowCount - 1) / 2) * 0.035 + ((row % 2) - 0.5) * 0.01,
+    y: -row * 0.027
+  };
+}
+
+export function reflowAllies(allies, playerX = INITIAL_PLAYER_X) {
+  const ordered = [...allies].sort((a, b) => a.id - b.id);
+  return ordered.map((ally, index) => {
+    const offset = formationOffset(index, ordered.length);
+    return {
+      ...ally,
+      formationX: offset.x,
+      formationY: offset.y,
+      x: clampPlayerX(playerX + offset.x),
+      y: PLAYER_Y + offset.y
+    };
+  });
+}
+
+export function createAlly(id, index = 0) {
+  return {
+    id,
+    x: INITIAL_PLAYER_X,
+    y: PLAYER_Y,
+    formationX: 0,
+    formationY: 0,
+    hp: 1,
+    maxHp: 1,
+    targetEnemyId: null,
+    fireCooldown: 0.12 + (index % 5) * 0.065
+  };
+}
+
+function createInitialAllies() {
+  return reflowAllies(
+    Array.from({ length: INITIAL_SQUAD_SIZE }, (_, index) => createAlly(index + 1, index)),
+    INITIAL_PLAYER_X
+  );
+}
+
 export function createInitialState() {
+  const allies = createInitialAllies();
   return {
     status: "running",
     playerX: INITIAL_PLAYER_X,
     inputX: 0,
-    squadSize: INITIAL_SQUAD_SIZE,
+    allies,
+    squadSize: allies.length,
     score: 0,
     killScore: 0,
     distance: 0,
     elapsed: 0,
     stage: 1,
-    nextId: 1,
+    nextId: INITIAL_SQUAD_SIZE + 1,
     enemySpawnCooldown: 1.1,
     gateSpawnCooldown: 1.5,
     bossSpawned: false,
     enemies: [],
     gates: [],
-    arrows: []
+    allyBullets: [],
+    enemyProjectiles: []
   };
 }
 
@@ -71,64 +143,60 @@ export function resetState() {
 
 export function normalizeDirection(direction) {
   const numericDirection = Number(direction);
-
   if (!Number.isFinite(numericDirection) || numericDirection === 0) {
     return 0;
   }
-
   return numericDirection < 0 ? -1 : 1;
 }
 
+function withPlayerX(state, x) {
+  const playerX = clampPlayerX(x);
+  const allies = reflowAllies(state.allies, playerX);
+  return { ...state, playerX, allies, squadSize: allies.length };
+}
+
 export function movePlayer(state, direction, deltaSeconds = 1 / 12) {
-  const nextX = clampPlayerX(state.playerX + normalizeDirection(direction) * PLAYER_SPEED * deltaSeconds);
-  return {
-    ...state,
-    playerX: nextX
-  };
+  return withPlayerX(state, state.playerX + normalizeDirection(direction) * PLAYER_SPEED * deltaSeconds);
 }
 
 export function setPlayerX(state, x) {
-  return {
-    ...state,
-    playerX: clampPlayerX(x)
-  };
+  return withPlayerX(state, x);
 }
 
 export function setInputX(state, inputX) {
-  return {
-    ...state,
-    inputX: normalizeDirection(inputX)
-  };
+  return { ...state, inputX: normalizeDirection(inputX) };
 }
 
 export function setSquadSize(state, size) {
-  const squadSize = clampSquadSize(size);
+  const targetSize = clampSquadSize(size);
+  let allies = [...state.allies].sort((a, b) => a.id - b.id);
+  let nextId = state.nextId;
+
+  if (targetSize < allies.length) {
+    allies = allies.slice(0, targetSize);
+  } else {
+    while (allies.length < targetSize) {
+      allies.push(createAlly(nextId, allies.length));
+      nextId += 1;
+    }
+  }
+
+  allies = reflowAllies(allies, state.playerX);
   return {
     ...state,
-    squadSize,
-    status: squadSize <= 0 ? "game-over" : state.status
+    allies,
+    squadSize: allies.length,
+    nextId,
+    status: allies.length === 0 ? "game-over" : state.status
   };
 }
 
 export function applyGateOperation(squadSize, gate) {
   const value = Math.max(1, Math.trunc(Number(gate.value)) || 1);
-
-  if (gate.operation === "+") {
-    return clampSquadSize(squadSize + value);
-  }
-
-  if (gate.operation === "-") {
-    return clampSquadSize(squadSize - value);
-  }
-
-  if (gate.operation === "x" || gate.operation === "*") {
-    return clampSquadSize(squadSize * value);
-  }
-
-  if (gate.operation === "/") {
-    return clampSquadSize(Math.floor(squadSize / value));
-  }
-
+  if (gate.operation === "+") return clampSquadSize(squadSize + value);
+  if (gate.operation === "-") return clampSquadSize(squadSize - value);
+  if (gate.operation === "x" || gate.operation === "*") return clampSquadSize(squadSize * value);
+  if (gate.operation === "/") return clampSquadSize(Math.floor(squadSize / value));
   return clampSquadSize(squadSize);
 }
 
@@ -139,7 +207,6 @@ export function chooseGatePair(random = Math.random) {
   const second = random() < 0.54
     ? { operation: "-", value: 3 + Math.floor(random() * 8) }
     : { operation: "+", value: 3 + Math.floor(random() * 8) };
-
   return [
     { ...first, side: "left", x: 0.31 },
     { ...second, side: "right", x: 0.69 }
@@ -156,54 +223,33 @@ export function createGatePair(state, random = Math.random) {
   }));
 }
 
-export function createEnemy(state, x = 0.5, type = "grunt") {
+export function spawnGatePair(state, random = Math.random) {
+  if (state.status !== "running") return state;
+  const gates = createGatePair(state, random);
+  return { ...state, nextId: state.nextId + gates.length, gates: [...state.gates, ...gates] };
+}
+
+export function createEnemy(state, x = 0.5, type = "grunt", options = {}) {
   const stage = currentStage(state.distance);
   const isBoss = type === "boss";
-  const isArcher = type === "archer";
-  const count = isBoss
-    ? 34 + stage * 9
-    : 8 + stage * 3 + Math.floor((state.elapsed % 9) / 3);
-
+  const hp = isBoss ? 28 + stage * 6 : 1;
   return {
-    id: state.nextId,
+    id: options.id ?? state.nextId,
+    waveId: options.waveId ?? state.nextId,
     type,
     x: clampPlayerX(x),
-    y: isBoss ? -0.18 : -0.1,
-    count,
-    maxCount: count,
-    speed: isBoss ? 0.09 : ENEMY_BASE_SPEED + stage * 0.012,
-    fireCooldown: isArcher ? 1.0 : Number.POSITIVE_INFINITY
-  };
-}
-
-export function createArrow(state, enemy) {
-  return {
-    id: state.nextId,
-    x: enemy.x,
-    y: enemy.y + 0.035,
-    speed: ARROW_SPEED,
-    damage: ARROW_DAMAGE
-  };
-}
-
-export function spawnGatePair(state, random = Math.random) {
-  if (state.status !== "running") {
-    return state;
-  }
-
-  const gates = createGatePair(state, random);
-  return {
-    ...state,
-    nextId: state.nextId + gates.length,
-    gates: [...state.gates, ...gates]
+    y: options.y ?? (isBoss ? -0.16 : -0.08),
+    hp,
+    maxHp: hp,
+    targetAllyId: null,
+    moveSpeed: isBoss ? 0.08 : ENEMY_BASE_SPEED + stage * 0.012,
+    attackRange: type === "archer" ? 0.34 : 0,
+    attackCooldown: type === "archer" ? 0.9 + ((options.id ?? state.nextId) % 4) * 0.1 : Number.POSITIVE_INFINITY
   };
 }
 
 export function spawnEnemy(state, x = 0.5, type = "grunt") {
-  if (state.status !== "running") {
-    return state;
-  }
-
+  if (state.status !== "running") return state;
   const enemy = createEnemy(state, x, type);
   return {
     ...state,
@@ -213,187 +259,291 @@ export function spawnEnemy(state, x = 0.5, type = "grunt") {
   };
 }
 
-export function spawnArrow(state, enemy) {
-  if (state.status !== "running") {
-    return state;
+export function spawnEnemyWave(state, x = 0.5, type = "grunt", count) {
+  if (state.status !== "running") return state;
+  const stage = currentStage(state.distance);
+  const enemyCount = type === "boss" ? 1 : clampInteger(count ?? 3 + stage, 1, 9);
+  const waveId = state.nextId;
+  const enemies = [];
+
+  for (let index = 0; index < enemyCount; index += 1) {
+    const column = index % 5;
+    const row = Math.floor(index / 5);
+    const offsetX = (column - (Math.min(5, enemyCount) - 1) / 2) * 0.055;
+    enemies.push(createEnemy(state, x + offsetX, type, {
+      id: state.nextId + index,
+      waveId,
+      y: (type === "boss" ? -0.16 : -0.08) - row * 0.045
+    }));
   }
 
-  const arrow = createArrow(state, enemy);
   return {
     ...state,
-    nextId: state.nextId + 1,
-    arrows: [...state.arrows, arrow]
+    nextId: state.nextId + enemies.length,
+    enemies: [...state.enemies, ...enemies],
+    bossSpawned: state.bossSpawned || type === "boss"
   };
 }
 
-export function moveWorld(state, deltaSeconds) {
+function moveToward(source, target, maxDistance) {
+  const dx = target.x - source.x;
+  const dy = target.y - source.y;
+  const distance = Math.hypot(dx, dy);
+  if (distance === 0 || maxDistance <= 0) return { x: source.x, y: source.y };
+  const ratio = Math.min(1, maxDistance / distance);
+  return { x: source.x + dx * ratio, y: source.y + dy * ratio };
+}
+
+export function moveEnemiesIndependently(state, deltaSeconds) {
+  if (state.status !== "running" || state.allies.length === 0) return state;
+  const enemies = state.enemies.map((enemy) => {
+    const target = nearestEntity(enemy, state.allies);
+    if (!target) return { ...enemy, targetAllyId: null };
+    const distance = Math.sqrt(distanceSquared(enemy, target));
+    const stopDistance = enemy.type === "archer" ? enemy.attackRange * 0.72 : 0;
+    const movement = Math.max(0, Math.min(enemy.moveSpeed * deltaSeconds, distance - stopDistance));
+    const position = moveToward(enemy, target, movement);
+    return { ...enemy, ...position, targetAllyId: target.id };
+  });
+  return { ...state, enemies };
+}
+
+function createAllyBullet(id, ally, enemy) {
+  return {
+    id,
+    sourceAllyId: ally.id,
+    targetEnemyId: enemy.id,
+    x: ally.x,
+    y: ally.y - 0.012,
+    speed: ALLY_BULLET_SPEED,
+    damage: 1
+  };
+}
+
+export function resolveAllyFiring(state) {
+  if (state.status !== "running" || state.enemies.length === 0) return state;
+  let nextId = state.nextId;
+  const bullets = [...state.allyBullets];
+  const enemiesById = new Map(state.enemies.map((enemy) => [enemy.id, enemy]));
+  const allies = state.allies.map((ally) => {
+    let target = enemiesById.get(ally.targetEnemyId);
+    if (!target || distanceSquared(ally, target) > ALLY_FIRE_RANGE * ALLY_FIRE_RANGE) {
+      target = nearestEntity(ally, state.enemies);
+    }
+    if (!target || distanceSquared(ally, target) > ALLY_FIRE_RANGE * ALLY_FIRE_RANGE) {
+      return { ...ally, targetEnemyId: null };
+    }
+    if (ally.fireCooldown > 0) return { ...ally, targetEnemyId: target.id };
+    bullets.push(createAllyBullet(nextId, ally, target));
+    nextId += 1;
+    return {
+      ...ally,
+      targetEnemyId: target.id,
+      fireCooldown: ALLY_FIRE_INTERVAL + (ally.id % 4) * 0.035
+    };
+  });
+  return { ...state, allies, allyBullets: bullets, nextId };
+}
+
+function createEnemyProjectile(id, enemy, ally) {
+  return {
+    id,
+    sourceEnemyId: enemy.id,
+    targetAllyId: ally.id,
+    x: enemy.x,
+    y: enemy.y + 0.012,
+    speed: ENEMY_PROJECTILE_SPEED,
+    damage: 1
+  };
+}
+
+export function resolveEnemyFiring(state) {
+  if (state.status !== "running" || state.allies.length === 0) return state;
+  let nextId = state.nextId;
+  const projectiles = [...state.enemyProjectiles];
+  const alliesById = new Map(state.allies.map((ally) => [ally.id, ally]));
+  const enemies = state.enemies.map((enemy) => {
+    if (enemy.type !== "archer") return enemy;
+    let target = alliesById.get(enemy.targetAllyId);
+    if (!target) target = nearestEntity(enemy, state.allies);
+    if (!target || distanceSquared(enemy, target) > enemy.attackRange * enemy.attackRange) {
+      return { ...enemy, targetAllyId: target?.id ?? null };
+    }
+    if (enemy.attackCooldown > 0) return { ...enemy, targetAllyId: target.id };
+    projectiles.push(createEnemyProjectile(nextId, enemy, target));
+    nextId += 1;
+    return { ...enemy, targetAllyId: target.id, attackCooldown: 1.15 + (enemy.id % 3) * 0.12 };
+  });
+  return { ...state, enemies, enemyProjectiles: projectiles, nextId };
+}
+
+function advanceProjectile(projectile, target, deltaSeconds) {
+  const distance = Math.sqrt(distanceSquared(projectile, target));
+  const travel = projectile.speed * deltaSeconds;
+  if (distance <= 0.018 || travel >= distance) return { hit: true, projectile };
+  return { hit: false, projectile: { ...projectile, ...moveToward(projectile, target, travel) } };
+}
+
+function enemyScore(enemy) {
+  if (enemy.type === "boss") return 120;
+  if (enemy.type === "archer") return 6;
+  return 4;
+}
+
+export function resolveAllyProjectiles(state, deltaSeconds) {
+  if (state.allyBullets.length === 0) return state;
+  const enemiesById = new Map(state.enemies.map((enemy) => [enemy.id, enemy]));
+  const damageById = new Map();
+  const movedBullets = [];
+
+  for (const bullet of state.allyBullets) {
+    const target = enemiesById.get(bullet.targetEnemyId);
+    if (!target) continue;
+    const result = advanceProjectile(bullet, target, deltaSeconds);
+    if (result.hit) {
+      damageById.set(target.id, (damageById.get(target.id) ?? 0) + bullet.damage);
+    } else {
+      movedBullets.push(result.projectile);
+    }
+  }
+
+  let killScore = state.killScore;
+  const enemies = [];
+  for (const enemy of state.enemies) {
+    const hp = Math.max(0, enemy.hp - (damageById.get(enemy.id) ?? 0));
+    if (hp === 0) {
+      killScore += enemyScore(enemy);
+    } else {
+      enemies.push({ ...enemy, hp });
+    }
+  }
+  const aliveIds = new Set(enemies.map((enemy) => enemy.id));
   return {
     ...state,
-    playerX: clampPlayerX(state.playerX + state.inputX * PLAYER_SPEED * deltaSeconds),
-    enemies: state.enemies
-      .map((enemy) => ({
-        ...enemy,
-        y: enemy.y + enemy.speed * deltaSeconds,
-        fireCooldown: enemy.fireCooldown - deltaSeconds
-      }))
-      .filter((enemy) => enemy.y < 1.14 && enemy.count > 0),
-    gates: state.gates
-      .map((gate) => ({
-        ...gate,
-        y: gate.y + gate.speed * deltaSeconds
-      }))
-      .filter((gate) => gate.y < PLAYER_Y + GATE_COLLECT_RADIUS_Y),
-    arrows: state.arrows
-      .map((arrow) => ({
-        ...arrow,
-        y: arrow.y + arrow.speed * deltaSeconds
-      }))
-      .filter((arrow) => arrow.y < 1.12)
+    enemies,
+    allyBullets: movedBullets.filter((bullet) => aliveIds.has(bullet.targetEnemyId)),
+    killScore,
+    score: Math.floor(state.distance) + killScore
+  };
+}
+
+export function resolveEnemyProjectiles(state, deltaSeconds) {
+  if (state.enemyProjectiles.length === 0) return state;
+  const alliesById = new Map(state.allies.map((ally) => [ally.id, ally]));
+  const damageById = new Map();
+  const movedProjectiles = [];
+
+  for (const projectile of state.enemyProjectiles) {
+    const target = alliesById.get(projectile.targetAllyId);
+    if (!target) continue;
+    const result = advanceProjectile(projectile, target, deltaSeconds);
+    if (result.hit) {
+      damageById.set(target.id, (damageById.get(target.id) ?? 0) + projectile.damage);
+    } else {
+      movedProjectiles.push(result.projectile);
+    }
+  }
+
+  const allies = reflowAllies(
+    state.allies
+      .map((ally) => ({ ...ally, hp: Math.max(0, ally.hp - (damageById.get(ally.id) ?? 0)) }))
+      .filter((ally) => ally.hp > 0),
+    state.playerX
+  );
+  const aliveIds = new Set(allies.map((ally) => ally.id));
+  return {
+    ...state,
+    allies,
+    squadSize: allies.length,
+    enemyProjectiles: movedProjectiles.filter((projectile) => aliveIds.has(projectile.targetAllyId)),
+    status: allies.length === 0 ? "game-over" : state.status
+  };
+}
+
+export function resolveCombatantContacts(state) {
+  if (state.status !== "running") return state;
+  const candidates = [];
+  for (const ally of state.allies) {
+    for (const enemy of state.enemies) {
+      const distance = Math.sqrt(distanceSquared(ally, enemy));
+      const radius = enemy.type === "boss" ? CONTACT_RADIUS * 1.45 : CONTACT_RADIUS;
+      if (distance <= radius) candidates.push({ allyId: ally.id, enemyId: enemy.id, distance });
+    }
+  }
+  candidates.sort((a, b) => a.distance - b.distance || a.allyId - b.allyId || a.enemyId - b.enemyId);
+  const removedAllies = new Set();
+  const removedEnemies = new Set();
+  for (const candidate of candidates) {
+    if (removedAllies.has(candidate.allyId) || removedEnemies.has(candidate.enemyId)) continue;
+    removedAllies.add(candidate.allyId);
+    removedEnemies.add(candidate.enemyId);
+  }
+  let killScore = state.killScore;
+  for (const enemy of state.enemies) {
+    if (removedEnemies.has(enemy.id)) killScore += enemyScore(enemy);
+  }
+  const allies = reflowAllies(state.allies.filter((ally) => !removedAllies.has(ally.id)), state.playerX);
+  const enemies = state.enemies.filter((enemy) => !removedEnemies.has(enemy.id));
+  const allyIds = new Set(allies.map((ally) => ally.id));
+  const enemyIds = new Set(enemies.map((enemy) => enemy.id));
+  return {
+    ...state,
+    allies,
+    enemies,
+    squadSize: allies.length,
+    allyBullets: state.allyBullets.filter((bullet) => enemyIds.has(bullet.targetEnemyId)),
+    enemyProjectiles: state.enemyProjectiles.filter((projectile) => allyIds.has(projectile.targetAllyId)),
+    killScore,
+    score: Math.floor(state.distance) + killScore,
+    status: allies.length === 0 ? "game-over" : state.status
   };
 }
 
 export function resolveGateContacts(state) {
-  if (state.status !== "running") {
-    return state;
-  }
-
-  let squadSize = state.squadSize;
+  if (state.status !== "running") return state;
+  let nextState = state;
   const remainingGates = [];
   const gatesByPairKey = new Map();
-
   for (const gate of state.gates) {
     const pairKey = Math.round(gate.y * 1000);
     gatesByPairKey.set(pairKey, [...(gatesByPairKey.get(pairKey) ?? []), gate]);
   }
-
   for (const gates of gatesByPairKey.values()) {
     const gateY = gates[0].y;
-    const overlapsY = Math.abs(gateY - PLAYER_Y) <= GATE_COLLECT_RADIUS_Y;
-
-    if (overlapsY) {
+    if (Math.abs(gateY - PLAYER_Y) <= GATE_COLLECT_RADIUS_Y) {
       const selectedSide = state.playerX <= 0.5 ? "left" : "right";
       const selectedGate = gates.find((gate) => gate.side === selectedSide) ?? gates[0];
-      squadSize = applyGateOperation(squadSize, selectedGate);
-      continue;
-    }
-
-    if (gateY <= PLAYER_Y + GATE_COLLECT_RADIUS_Y) {
+      nextState = setSquadSize(nextState, applyGateOperation(nextState.allies.length, selectedGate));
+    } else if (gateY <= PLAYER_Y + GATE_COLLECT_RADIUS_Y) {
       remainingGates.push(...gates);
     }
   }
-
-  return setSquadSize({ ...state, gates: remainingGates }, squadSize);
-}
-
-export function resolveEnemyContacts(state) {
-  if (state.status !== "running") {
-    return state;
-  }
-
-  let squadSize = state.squadSize;
-  let killScore = state.killScore ?? 0;
-  const remainingEnemies = [];
-
-  for (const enemy of state.enemies) {
-    const overlapsX = Math.abs(enemy.x - state.playerX) <= CONTACT_RADIUS_X + Math.min(0.14, enemy.count * 0.0018);
-    const overlapsY = Math.abs(enemy.y - PLAYER_Y) <= CONTACT_RADIUS_Y || enemy.y > PLAYER_Y;
-
-    if (overlapsX && overlapsY) {
-      const defeated = Math.min(squadSize, enemy.count);
-      squadSize -= defeated;
-      const enemyCount = enemy.count - defeated;
-      killScore += defeated * (enemy.type === "boss" ? 8 : 4);
-
-      if (enemyCount > 0) {
-        remainingEnemies.push({ ...enemy, count: enemyCount, y: PLAYER_Y - CONTACT_RADIUS_Y });
-      }
-    } else if (enemy.y < 1.12) {
-      remainingEnemies.push(enemy);
-    }
-  }
-
-  return setSquadSize(
-    {
-      ...state,
-      enemies: remainingEnemies,
-      killScore,
-      score: Math.floor(state.distance) + killScore
-    },
-    squadSize
-  );
-}
-
-export function resolveArrowContacts(state) {
-  if (state.status !== "running") {
-    return state;
-  }
-
-  let squadSize = state.squadSize;
-  const remainingArrows = [];
-
-  for (const arrow of state.arrows) {
-    const overlapsX = Math.abs(arrow.x - state.playerX) <= CONTACT_RADIUS_X * 0.78;
-    const overlapsY = Math.abs(arrow.y - PLAYER_Y) <= CONTACT_RADIUS_Y;
-
-    if (overlapsX && overlapsY) {
-      squadSize -= arrow.damage;
-    } else if (arrow.y <= PLAYER_Y + CONTACT_RADIUS_Y) {
-      remainingArrows.push(arrow);
-    }
-  }
-
-  return setSquadSize({ ...state, arrows: remainingArrows }, squadSize);
-}
-
-export function resolveEnemyFiring(state) {
-  if (state.status !== "running") {
-    return state;
-  }
-
-  let nextState = state;
-  const enemies = [];
-
-  for (const enemy of nextState.enemies) {
-    if (enemy.type !== "archer" || enemy.fireCooldown > 0 || enemy.y > PLAYER_Y - 0.16) {
-      enemies.push(enemy);
-      continue;
-    }
-
-    nextState = spawnArrow(nextState, enemy);
-    enemies.push({ ...enemy, fireCooldown: Math.max(0.8, 1.5 - nextState.stage * 0.08) });
-  }
-
-  return {
-    ...nextState,
-    enemies
-  };
+  return { ...nextState, gates: remainingGates };
 }
 
 export function tickFoundation(state, deltaSeconds) {
-  if (state.status !== "running") {
-    return state;
-  }
-
+  if (state.status !== "running") return state;
   const elapsed = state.elapsed + deltaSeconds;
   const distance = state.distance + deltaSeconds * 24;
   const stage = currentStage(distance);
+  return { ...state, elapsed, distance, stage, score: Math.floor(distance) + state.killScore };
+}
 
+function moveWorldObjects(state, deltaSeconds) {
+  const moved = withPlayerX(state, state.playerX + state.inputX * PLAYER_SPEED * deltaSeconds);
   return {
-    ...state,
-    elapsed,
-    distance,
-    stage,
-    score: Math.floor(distance) + (state.killScore ?? 0)
+    ...moved,
+    allies: moved.allies.map((ally) => ({ ...ally, fireCooldown: ally.fireCooldown - deltaSeconds })),
+    enemies: moved.enemies.map((enemy) => ({ ...enemy, attackCooldown: enemy.attackCooldown - deltaSeconds })),
+    gates: moved.gates
+      .map((gate) => ({ ...gate, y: gate.y + gate.speed * deltaSeconds }))
+      .filter((gate) => gate.y < PLAYER_Y + GATE_COLLECT_RADIUS_Y)
   };
 }
 
 export function tickGame(state, deltaSeconds, random = Math.random) {
-  if (state.status !== "running") {
-    return state;
-  }
-
+  if (state.status !== "running") return state;
   let nextState = tickFoundation(state, deltaSeconds);
-
   nextState = {
     ...nextState,
     enemySpawnCooldown: nextState.enemySpawnCooldown - deltaSeconds,
@@ -401,40 +551,31 @@ export function tickGame(state, deltaSeconds, random = Math.random) {
   };
 
   while (nextState.gateSpawnCooldown <= 0) {
-    nextState = spawnGatePair(
-      {
-        ...nextState,
-        gateSpawnCooldown: nextState.gateSpawnCooldown + Math.max(2.0, GATE_SPAWN_INTERVAL_SECONDS - nextState.stage * 0.16)
-      },
-      random
-    );
+    nextState = spawnGatePair({
+      ...nextState,
+      gateSpawnCooldown: nextState.gateSpawnCooldown + Math.max(2, GATE_SPAWN_INTERVAL_SECONDS - nextState.stage * 0.16)
+    }, random);
   }
 
   while (nextState.enemySpawnCooldown <= 0) {
     const type = nextState.stage >= ARCHER_STAGE && random() > 0.62 ? "archer" : "grunt";
-    nextState = spawnEnemy(
-      {
-        ...nextState,
-        enemySpawnCooldown: nextState.enemySpawnCooldown + Math.max(1.1, ENEMY_SPAWN_INTERVAL_SECONDS - nextState.stage * 0.18)
-      },
-      0.2 + random() * 0.6,
-      type
-    );
+    nextState = spawnEnemyWave({
+      ...nextState,
+      enemySpawnCooldown: nextState.enemySpawnCooldown + Math.max(1.2, ENEMY_SPAWN_INTERVAL_SECONDS - nextState.stage * 0.16)
+    }, 0.24 + random() * 0.52, type);
   }
 
   if (nextState.stage >= BOSS_STAGE && !nextState.bossSpawned) {
-    nextState = spawnEnemy(nextState, 0.5, "boss");
+    nextState = spawnEnemyWave(nextState, 0.5, "boss", 1);
   }
 
-  nextState = moveWorld(nextState, deltaSeconds);
+  nextState = moveWorldObjects(nextState, deltaSeconds);
+  nextState = moveEnemiesIndependently(nextState, deltaSeconds);
+  nextState = resolveAllyFiring(nextState);
   nextState = resolveEnemyFiring(nextState);
-  nextState = resolveArrowContacts(nextState);
-  if (nextState.status === "running") {
-    nextState = resolveEnemyContacts(nextState);
-  }
-  if (nextState.status === "running") {
-    nextState = resolveGateContacts(nextState);
-  }
-
+  nextState = resolveAllyProjectiles(nextState, deltaSeconds);
+  nextState = resolveEnemyProjectiles(nextState, deltaSeconds);
+  if (nextState.status === "running") nextState = resolveCombatantContacts(nextState);
+  if (nextState.status === "running") nextState = resolveGateContacts(nextState);
   return nextState;
 }

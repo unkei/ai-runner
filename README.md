@@ -5,10 +5,12 @@ A lightweight browser game prototype for a crowd-clash runner.
 ## Gameplay
 
 - Move freely left and right with `ArrowLeft`/`ArrowRight`, `A`/`D`, drag/touch, or the on-screen buttons.
-- The squad does not shoot. Crowd groups collide one-for-one, and both sides lose the same number of characters.
+- Every blue stickman independently finds a nearby enemy and automatically fires a reusable gun; one ally can defeat multiple enemies over time.
+- Every enemy stickman independently chooses an ally, moves, and attacks. Enemy projectiles damage only the ally they hit.
+- When an enemy and ally stickman collide directly, that matched pair disappears.
 - Gates appear as two side-by-side choices and apply `+`, `-`, `x`, `*`, and `/` squad operations.
-- Later stages introduce archers that fire arrows.
-- The final stretch introduces a large boss that requires dozens of squad members to cancel out.
+- Later stages introduce archers that independently aim and fire at allies.
+- The final stretch introduces a large multi-hit boss, but direct contact still removes the boss and the single ally it touches.
 - The run ends when squad size reaches `0`; Restart starts a fresh run.
 
 ## Run
