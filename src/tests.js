@@ -1,5 +1,6 @@
 import {
   BOSS_STAGE,
+  GATE_LOOKAHEAD_DISTANCE,
   INITIAL_PLAYER_X,
   INITIAL_SQUAD_SIZE,
   MIDBOSS_WAVE_INTERVAL,
@@ -15,6 +16,7 @@ import {
   currentStage,
   moveEnemiesIndependently,
   movePlayer,
+  projectGateY,
   resolveAllyFiring,
   resolveAllyProjectiles,
   resolveCombatantContacts,
@@ -104,9 +106,10 @@ function testGateContactMutatesAllyEntities() {
   const resolved = resolveGateContacts({
     ...base,
     playerX: 0.31,
+    distance: 40,
     gates: [
-      { id: 50, x: 0.31, y: PLAYER_Y, side: "left", operation: "+", value: 2, speed: 0.2 },
-      { id: 51, x: 0.69, y: PLAYER_Y, side: "right", operation: "x", value: 3, speed: 0.2 }
+      { id: 50, pairId: 50, x: 0.31, worldDistance: 40, side: "left", operation: "+", value: 2 },
+      { id: 51, pairId: 50, x: 0.69, worldDistance: 40, side: "right", operation: "x", value: 3 }
     ]
   });
   assert(resolved.allies.length === 5, "selected gate should add real ally entities");
@@ -121,6 +124,37 @@ function testSpawnGatePairCreatesTwoChoices() {
   const state = spawnGatePair(createInitialState(), () => values[index++] ?? 0);
   assert(state.gates.length === 2, "gate spawn should create exactly two choices");
   assert(state.gates[0].id !== state.gates[1].id, "gate ids should differ");
+  assert(state.gates[0].pairId === state.gates[1].pairId, "gate choices should share a stable pair id");
+  assert(state.gates.every((gate) => gate.worldDistance === GATE_LOOKAHEAD_DISTANCE), "gate pair should share a fixed world distance");
+  assert(state.gates.every((gate) => !("y" in gate) && !("speed" in gate)), "world-fixed gates should not carry autonomous depth movement");
+}
+
+function testGateWorldDistanceStaysFixedWhilePlayerAdvances() {
+  const spawned = spawnGatePair({ ...createInitialState(), gateSpawnCooldown: 10 }, () => 0);
+  const worldDistance = spawned.gates[0].worldDistance;
+  const beforeY = projectGateY(worldDistance, spawned.distance);
+  const moved = tickGame({ ...spawned, enemySpawnCooldown: 10 }, 0.5, () => 0);
+  const afterY = projectGateY(worldDistance, moved.distance);
+  assert(moved.gates.every((gate) => gate.worldDistance === worldDistance), "gate world distance should not change during ticks");
+  assert(afterY > beforeY, "player progress should move the projected gate toward the player");
+}
+
+function testLargeDistanceCrossingCollectsGateOnce() {
+  let state = setSquadSize(createInitialState(), 3);
+  state = {
+    ...state,
+    playerX: 0.69,
+    distance: 120,
+    gates: [
+      { id: 50, pairId: 50, x: 0.31, worldDistance: 100, side: "left", operation: "+", value: 2 },
+      { id: 51, pairId: 50, x: 0.69, worldDistance: 100, side: "right", operation: "x", value: 3 }
+    ]
+  };
+  state = resolveGateContacts(state);
+  assert(state.allies.length === 9, "crossed gate should apply the selected operation despite a large distance step");
+  assert(state.gates.length === 0, "crossed pair should be removed after collection");
+  const resolvedAgain = resolveGateContacts(state);
+  assert(resolvedAgain.allies.length === 9, "removed gate should not apply more than once");
 }
 
 function testEnemyWaveCreatesIndependentEntities() {
@@ -419,6 +453,8 @@ export function runTests() {
     testGateOperations,
     testGateContactMutatesAllyEntities,
     testSpawnGatePairCreatesTwoChoices,
+    testGateWorldDistanceStaysFixedWhilePlayerAdvances,
+    testLargeDistanceCrossingCollectsGateOnce,
     testEnemyWaveCreatesIndependentEntities,
     testDefaultEnemyWavesAreLargeFrontalFormations,
     testEveryFourthWaveAddsOneMidboss,

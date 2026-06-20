@@ -9,6 +9,7 @@ export const TRACK_MAX_X = 0.88;
 export const ENEMY_BASE_SPEED = 0.15;
 export const ENEMY_SPAWN_INTERVAL_SECONDS = 1.45;
 export const GATE_SPAWN_INTERVAL_SECONDS = 3.25;
+export const GATE_LOOKAHEAD_DISTANCE = 96;
 export const ALLY_FIRE_INTERVAL = 0.72;
 export const ALLY_FIRE_RANGE = 1.2;
 export const ALLY_BULLET_SPEED = 1.35;
@@ -20,7 +21,6 @@ export const BOSS_STAGE = 4;
 export const MIDBOSS_WAVE_INTERVAL = 4;
 export const STAGE_DISTANCE = 260;
 export const CONTACT_RADIUS = 0.038;
-export const GATE_COLLECT_RADIUS_Y = 0.065;
 
 export function clamp(value, min, max) {
   const numericValue = Number(value);
@@ -219,13 +219,21 @@ export function chooseGatePair(random = Math.random) {
 }
 
 export function createGatePair(state, random = Math.random) {
+  const pairId = state.nextId;
+  const worldDistance = state.distance + GATE_LOOKAHEAD_DISTANCE;
   return chooseGatePair(random).map((gate, index) => ({
     id: state.nextId + index,
-    y: -0.08,
-    speed: 0.24,
+    pairId,
+    worldDistance,
     width: 0.34,
     ...gate
   }));
+}
+
+export function projectGateY(worldDistance, playerDistance) {
+  const relativeDistance = worldDistance - playerDistance;
+  const progress = 1 - relativeDistance / GATE_LOOKAHEAD_DISTANCE;
+  return -0.08 + clamp(progress, 0, 1) * (PLAYER_Y + 0.08);
 }
 
 export function spawnGatePair(state, random = Math.random) {
@@ -564,18 +572,19 @@ export function resolveGateContacts(state) {
   if (state.status !== "running") return state;
   let nextState = state;
   const remainingGates = [];
-  const gatesByPairKey = new Map();
+  const gatesByPairId = new Map();
   for (const gate of state.gates) {
-    const pairKey = Math.round(gate.y * 1000);
-    gatesByPairKey.set(pairKey, [...(gatesByPairKey.get(pairKey) ?? []), gate]);
+    gatesByPairId.set(gate.pairId, [...(gatesByPairId.get(gate.pairId) ?? []), gate]);
   }
-  for (const gates of gatesByPairKey.values()) {
-    const gateY = gates[0].y;
-    if (Math.abs(gateY - PLAYER_Y) <= GATE_COLLECT_RADIUS_Y) {
+  const orderedPairs = [...gatesByPairId.values()].sort((first, second) => (
+    first[0].worldDistance - second[0].worldDistance || first[0].pairId - second[0].pairId
+  ));
+  for (const gates of orderedPairs) {
+    if (gates[0].worldDistance <= state.distance) {
       const selectedSide = state.playerX <= 0.5 ? "left" : "right";
       const selectedGate = gates.find((gate) => gate.side === selectedSide) ?? gates[0];
       nextState = setSquadSize(nextState, applyGateOperation(nextState.allies.length, selectedGate));
-    } else if (gateY <= PLAYER_Y + GATE_COLLECT_RADIUS_Y) {
+    } else {
       remainingGates.push(...gates);
     }
   }
@@ -597,8 +606,6 @@ function moveWorldObjects(state, deltaSeconds) {
     allies: moved.allies.map((ally) => ({ ...ally, fireCooldown: ally.fireCooldown - deltaSeconds })),
     enemies: moved.enemies.map((enemy) => ({ ...enemy, attackCooldown: enemy.attackCooldown - deltaSeconds })),
     gates: moved.gates
-      .map((gate) => ({ ...gate, y: gate.y + gate.speed * deltaSeconds }))
-      .filter((gate) => gate.y < PLAYER_Y + GATE_COLLECT_RADIUS_Y)
   };
 }
 
