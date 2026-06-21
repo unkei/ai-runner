@@ -1,4 +1,5 @@
 import {
+  COURSE_SPEED,
   GATE_LOOKAHEAD_DISTANCE,
   PLAYER_Y,
   TRACK_MAX_X,
@@ -26,6 +27,7 @@ let lastFrame = performance.now();
 let pointerActive = false;
 const heldDirections = new Set();
 const ROAD_BAND_INTERVAL = 18;
+const COURSE_SPEED_RATIO = COURSE_SPEED / 24;
 
 function updateKeyboardInput() {
   const leftHeld = heldDirections.has("left");
@@ -236,7 +238,7 @@ function drawSquad() {
   const allies = [...state.allies].sort((a, b) => a.y - b.y || a.id - b.id);
   for (const ally of allies) {
     const point = worldToCanvas(ally.x, ally.y);
-    drawStickFigure(point.x, point.y, point.scale * 0.82, "#38c9f5", "#075985", state.elapsed * 9 + ally.id * 1.7);
+    drawStickFigure(point.x, point.y, point.scale * 0.82, "#38c9f5", "#075985", state.elapsed * 9 * COURSE_SPEED_RATIO + ally.id * 1.7);
     drawGun(point, enemiesById.get(ally.targetEnemyId), point.scale * 0.82);
   }
   const center = worldToCanvas(state.playerX, PLAYER_Y);
@@ -255,7 +257,7 @@ function drawEnemies() {
         ? point.scale * 1.5
         : point.scale * 0.88;
     const stroke = enemy.type === "boss" ? "#7f1d1d" : enemy.type === "midboss" ? "#581c87" : "#991b1b";
-    drawStickFigure(point.x, point.y, scale, color, stroke, state.elapsed * 7.5 + enemy.id * 1.3);
+    drawStickFigure(point.x, point.y, scale, color, stroke, state.elapsed * 7.5 * COURSE_SPEED_RATIO + enemy.id * 1.3);
 
     if (enemy.maxHp > 1) {
       drawBubble(point.x, point.y - 22 * scale, `${enemy.hp}/${enemy.maxHp}`, "#be123c");
