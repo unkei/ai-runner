@@ -17,6 +17,7 @@ import {
   applyGateOperation,
   clampPlayerX,
   clampSquadSize,
+  chooseGatePair,
   createEnemy,
   createInitialState,
   currentStage,
@@ -130,6 +131,26 @@ function testGateOperations() {
   assert(applyGateOperation(5, { operation: "/", value: 2 }) === 2, "divide gate should floor");
 }
 
+function testGateSidesRandomizePositiveAndNegativeChoices() {
+  const positiveLeft = chooseGatePair(() => 0.1);
+  const values = [0.1, 0.4, 0.2, 0.6, 0.9];
+  let index = 0;
+  const positiveRight = chooseGatePair(() => values[index++]);
+  const isPositive = (gate) => gate.operation === "+" || gate.operation === "x";
+
+  assert(isPositive(positiveLeft[0]) && !isPositive(positiveLeft[1]), "low side roll should place the positive gate on the left");
+  assert(!isPositive(positiveRight[0]) && isPositive(positiveRight[1]), "high side roll should place the positive gate on the right");
+  assert(positiveLeft.map((gate) => gate.side).join(",") === "left,right", "gate order should retain stable side labels");
+}
+
+function testGatePairSupportsNegativeDivision() {
+  const values = [0.9, 0.4, 0.9, 0.6, 0.1];
+  let index = 0;
+  const gates = chooseGatePair(() => values[index++]);
+  assert(gates.some((gate) => gate.operation === "x"), "positive gate should support multiplication");
+  assert(gates.some((gate) => gate.operation === "/"), "negative gate should support division");
+}
+
 function testGateContactMutatesAllyEntities() {
   const base = setSquadSize(createInitialState(), 3);
   const resolved = resolveGateContacts({
@@ -196,14 +217,14 @@ function testEnemyWaveCreatesIndependentEntities() {
 
 function testDefaultEnemyWavesAreLargeFrontalFormations() {
   const firstStage = spawnEnemyWave(createInitialState(), 0.5, "grunt");
-  assert(firstStage.enemies.length === 8, "first-stage wave should contain eight enemies");
-  assert(new Set(firstStage.enemies.map((enemy) => enemy.x)).size === 6, "large wave should span six frontal columns");
+  assert(firstStage.enemies.length === 12, "first-stage wave should contain twelve enemies");
+  assert(new Set(firstStage.enemies.map((enemy) => enemy.x)).size === 8, "large wave should span eight frontal columns");
   assert(new Set(firstStage.enemies.map((enemy) => enemy.y)).size === 2, "large wave should use multiple rows");
   assert(firstStage.enemies.every((enemy) => enemy.x >= TRACK_MIN_X && enemy.x <= TRACK_MAX_X), "wave should remain on track");
 
   const lateState = { ...createInitialState(), distance: STAGE_DISTANCE * 10 };
   const lateWave = spawnEnemyWave(lateState, 0.5, "grunt");
-  assert(lateWave.enemies.length === 18, "large waves should cap at eighteen enemies");
+  assert(lateWave.enemies.length === 30, "large waves should cap at thirty enemies");
 }
 
 function testEveryFourthWaveAddsOneMidboss() {
@@ -306,6 +327,26 @@ function testAllyWanderMovesLaterallyWithoutChangingRow() {
   const moved = advanceAllyWander(state, 0.5);
   assert(Math.abs(moved.allies[0].x - (ally.x + 0.04)) < 1e-12, "wander should move an ally laterally");
   assert(moved.allies[0].y === ally.y, "wander should preserve the ally formation row");
+}
+
+function testAlliesTrendBackTowardSquadCenter() {
+  let state = setSquadSize(createInitialState(), 20);
+  state = {
+    ...state,
+    allies: state.allies.map((ally, index) => ({
+      ...ally,
+      formationX: 0,
+      wanderX: index < 10 ? -0.16 : 0.16,
+      wanderVelocity: 0,
+      wanderCooldown: 0,
+      pushX: 0
+    }))
+  };
+  const moved = advanceAllyWander(state, 0.001);
+  const inward = moved.allies.filter((ally) => (
+    ally.wanderX < 0 ? ally.wanderVelocity > 0 : ally.wanderVelocity < 0
+  ));
+  assert(inward.length >= 16, "at least eighty percent of dispersed allies should choose an inward direction");
 }
 
 function testAlliesFallAtTrackEdgesAndCleanTargetedProjectiles() {
@@ -640,6 +681,8 @@ export function runTests() {
     testFoundationTickScoresDistanceAndStage,
     testGateCadenceMatchesSlowerCourseRatio,
     testGateOperations,
+    testGateSidesRandomizePositiveAndNegativeChoices,
+    testGatePairSupportsNegativeDivision,
     testGateContactMutatesAllyEntities,
     testSpawnGatePairCreatesTwoChoices,
     testGateWorldDistanceStaysFixedWhilePlayerAdvances,
@@ -653,6 +696,7 @@ export function runTests() {
     testAllyFireTimingsStartStaggeredAndResetToOneSecond,
     testAlliesReceiveVariedDeterministicWander,
     testAllyWanderMovesLaterallyWithoutChangingRow,
+    testAlliesTrendBackTowardSquadCenter,
     testAlliesFallAtTrackEdgesAndCleanTargetedProjectiles,
     testOverlappingAlliesPushApartWithoutBeingRemoved,
     testExactAllyOverlapResolvesDeterministically,
