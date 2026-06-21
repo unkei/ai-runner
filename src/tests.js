@@ -4,6 +4,7 @@ import {
   ALLY_COLLISION_RADIUS,
   BOSS_STAGE,
   COURSE_SPEED,
+  GATE_SPAWN_INTERVAL_SECONDS,
   GATE_LOOKAHEAD_DISTANCE,
   INITIAL_PLAYER_X,
   INITIAL_SQUAD_SIZE,
@@ -115,6 +116,11 @@ function testFoundationTickScoresDistanceAndStage() {
   assert(state.distance === COURSE_SPEED && COURSE_SPEED === 16, "one second should advance distance at the slower course speed");
   assert(state.score === COURSE_SPEED, "score should follow floored distance");
   assert(currentStage(STAGE_DISTANCE) === 2, "stage should increase at stage distance");
+}
+
+function testGateCadenceMatchesSlowerCourseRatio() {
+  assert(GATE_SPAWN_INTERVAL_SECONDS === 4.875, "gate cadence should slow by the inverse course-speed ratio");
+  assert(Math.abs(COURSE_SPEED * GATE_SPAWN_INTERVAL_SECONDS - 78) < 1e-12, "slower gates should preserve their previous course spacing");
 }
 
 function testGateOperations() {
@@ -632,6 +638,7 @@ export function runTests() {
     testHeldInputMovesDuringTick,
     testSetSquadSizeCreatesAndRemovesEntities,
     testFoundationTickScoresDistanceAndStage,
+    testGateCadenceMatchesSlowerCourseRatio,
     testGateOperations,
     testGateContactMutatesAllyEntities,
     testSpawnGatePairCreatesTwoChoices,
