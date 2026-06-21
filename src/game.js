@@ -4,6 +4,7 @@ import {
   TRACK_MIN_X,
   movePlayer,
   projectGateY,
+  projectWorldPoint,
   resetState,
   setInputX,
   setPlayerX,
@@ -30,14 +31,11 @@ function updateKeyboardInput() {
 }
 
 function worldXToCanvas(x, y = PLAYER_Y) {
-  const perspective = 0.32 + y * 0.86;
-  const trackLeft = canvas.width * (0.5 - perspective * 0.43);
-  const trackRight = canvas.width * (0.5 + perspective * 0.43);
-  return trackLeft + ((x - TRACK_MIN_X) / (TRACK_MAX_X - TRACK_MIN_X)) * (trackRight - trackLeft);
+  return projectWorldPoint(x, y).x * canvas.width;
 }
 
 function worldYToCanvas(y) {
-  return canvas.height * (0.05 + y * 0.9);
+  return projectWorldPoint(0.5, y).y * canvas.height;
 }
 
 function worldToCanvas(x, y) {
@@ -301,13 +299,13 @@ function drawGates() {
 
 function drawProjectiles() {
   for (const bullet of state.allyBullets) {
-    const point = worldToCanvas(bullet.x, bullet.y);
-    const forward = worldToCanvas(
-      bullet.x + bullet.velocityX * 0.03,
-      bullet.y + bullet.velocityY * 0.03
-    );
-    const directionX = forward.x - point.x;
-    const directionY = forward.y - point.y;
+    const point = {
+      x: bullet.projectedX * canvas.width,
+      y: bullet.projectedY * canvas.height,
+      scale: 0.44 + bullet.y * 0.78
+    };
+    const directionX = bullet.projectedVelocityX * canvas.width;
+    const directionY = bullet.projectedVelocityY * canvas.height;
     const directionLength = Math.hypot(directionX, directionY) || 1;
     const unitX = directionX / directionLength;
     const unitY = directionY / directionLength;
