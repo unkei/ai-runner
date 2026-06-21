@@ -6,13 +6,13 @@ A lightweight browser game prototype for a crowd-clash runner.
 
 - Move freely left and right with `ArrowLeft`/`ArrowRight`, `A`/`D`, drag/touch, or the on-screen buttons.
 - Every blue stickman independently finds a nearby enemy and automatically fires a reusable gun with a one-second cooldown; each bullet locks its direction when fired and continues straight instead of homing toward a moving target.
-- Blue stickmen wander independently with animated walking poses while tending back toward the squad center when they spread out. A stickman that wanders beyond a track edge falls from the squad.
+- Blue stickmen wander independently with animated walking poses while strongly returning toward a compact formation centered around the squad anchor. Front-to-back collision displacement recovers faster so the squad does not stretch into a long column. A stickman that wanders beyond a track edge falls from the squad.
 - Blue stickmen physically push one another apart when their paths overlap; a collision push can also send a stickman over a track edge.
 - Every enemy stickman independently chooses an ally, moves, and attacks. Enemy projectiles damage only the ally they hit.
 - Large waves of 12–30 enemies form compact rows of up to eight columns across the front and advance from the far end of the track.
 - Every fourth enemy wave adds a purple midboss that takes multiple shots to defeat and displays its remaining HP.
 - When an enemy and ally stickman collide directly, that matched pair disappears.
-- Gates are fixed to positions on the course and approach only through forward player progress; every pair randomizes one positive and one negative `+`, `-`, `x`, `*`, or `/` squad operation across the left and right sides.
+- Gates are fixed to positions on the course and approach only through forward player progress; every pair randomizes one positive and one negative `+`, `-`, `x`, `*`, or `/` squad operation across the left and right sides. Positive results queue reinforcements that appear one at a time at the squad center, pushing earlier allies outward.
 - Road bands and gate labels share one world-distance projection, so their forward scrolling stays synchronized.
 - Course progress, gate cadence, and walking animation run at the same slower pace, while blue bullets travel at half their previous speed without losing their approximate range.
 - Later stages introduce archers that independently aim and fire at allies.
