@@ -2,6 +2,9 @@ import {
   ALLY_BULLET_LIFETIME,
   ALLY_BULLET_SPEED,
   ALLY_COLLISION_RADIUS,
+  ALLY_PUSH_X_RETURN_SPEED,
+  ALLY_PUSH_Y_RETURN_SPEED,
+  ALLY_SPAWN_INTERVAL_SECONDS,
   BOSS_STAGE,
   COURSE_SPEED,
   GATE_SPAWN_INTERVAL_SECONDS,
@@ -14,6 +17,7 @@ import {
   TRACK_MAX_X,
   TRACK_MIN_X,
   advanceAllyWander,
+  advanceAllyReinforcements,
   applyGateOperation,
   clampPlayerX,
   clampSquadSize,
@@ -36,6 +40,7 @@ import {
   resetState,
   setInputX,
   setPlayerX,
+  scheduleSquadSize,
   setSquadSize,
   spawnEnemy,
   spawnEnemyWave,
@@ -162,10 +167,14 @@ function testGateContactMutatesAllyEntities() {
       { id: 51, pairId: 50, x: 0.69, worldDistance: 40, side: "right", operation: "x", value: 3 }
     ]
   });
-  assert(resolved.allies.length === 5, "selected gate should add real ally entities");
-  assert(resolved.squadSize === 5, "HUD count should follow ally entities after gate");
-  assert(uniqueIds(resolved.allies), "gate-created allies should have unique ids");
+  assert(resolved.allies.length === 3, "selected positive gate should not add every ally immediately");
+  assert(resolved.pendingAllyAdds === 2, "selected positive gate should queue the increase");
   assert(resolved.gates.length === 0, "gate pair should be removed after selection");
+  const firstSpawn = advanceAllyReinforcements(resolved, 0);
+  const completed = advanceAllyReinforcements(firstSpawn, ALLY_SPAWN_INTERVAL_SECONDS);
+  assert(completed.allies.length === 5 && completed.pendingAllyAdds === 0, "queued gate allies should spawn one at a time");
+  assert(completed.squadSize === 5, "HUD count should follow spawned ally entities");
+  assert(uniqueIds(completed.allies), "gate-created allies should have unique ids");
 }
 
 function testSpawnGatePairCreatesTwoChoices() {
@@ -201,10 +210,10 @@ function testLargeDistanceCrossingCollectsGateOnce() {
     ]
   };
   state = resolveGateContacts(state);
-  assert(state.allies.length === 9, "crossed gate should apply the selected operation despite a large distance step");
+  assert(state.allies.length === 3 && state.pendingAllyAdds === 6, "crossed gate should queue the selected operation despite a large distance step");
   assert(state.gates.length === 0, "crossed pair should be removed after collection");
   const resolvedAgain = resolveGateContacts(state);
-  assert(resolvedAgain.allies.length === 9, "removed gate should not apply more than once");
+  assert(resolvedAgain.allies.length === 3 && resolvedAgain.pendingAllyAdds === 6, "removed gate should not apply more than once");
 }
 
 function testEnemyWaveCreatesIndependentEntities() {
@@ -346,7 +355,61 @@ function testAlliesTrendBackTowardSquadCenter() {
   const inward = moved.allies.filter((ally) => (
     ally.wanderX < 0 ? ally.wanderVelocity > 0 : ally.wanderVelocity < 0
   ));
-  assert(inward.length >= 16, "at least eighty percent of dispersed allies should choose an inward direction");
+  assert(inward.length >= 19, "at least ninety-five percent of dispersed allies should choose an inward direction");
+}
+
+function testFormationKeepsFrontToBackDepthCompact() {
+  const state = setSquadSize(createInitialState(), 30);
+  const formationYs = state.allies.map((ally) => ally.formationY);
+  const depth = Math.max(...formationYs) - Math.min(...formationYs);
+  assert(depth <= 0.08 + Number.EPSILON, "thirty allies should use a compact front-to-back base formation");
+  assert(Math.abs(Math.max(...formationYs) + Math.min(...formationYs)) < 1e-12, "formation rows should stay centered around the squad anchor");
+}
+
+function testCohesionReturnsPushOffsetsTowardCenter() {
+  let state = setSquadSize(createInitialState(), 1);
+  state = {
+    ...state,
+    allies: [{
+      ...state.allies[0],
+      pushX: 0.2,
+      pushY: 0.2,
+      wanderVelocity: 0,
+      wanderCooldown: 10
+    }]
+  };
+  const moved = advanceAllyWander(state, 0.5);
+  assert(Math.abs(moved.allies[0].pushX - (0.2 - ALLY_PUSH_X_RETURN_SPEED * 0.5)) < 1e-12, "horizontal collision push should return toward center");
+  assert(Math.abs(moved.allies[0].pushY - (0.2 - ALLY_PUSH_Y_RETURN_SPEED * 0.5)) < 1e-12, "vertical collision push should return toward center");
+  assert(moved.allies[0].pushY < moved.allies[0].pushX, "front-to-back displacement should recover faster than lateral displacement");
+}
+
+function testReinforcementsSpawnOneAtATimeFromCenter() {
+  const base = setSquadSize(createInitialState(), 1);
+  const queued = scheduleSquadSize(base, 3);
+  assert(queued.allies.length === 1 && queued.pendingAllyAdds === 2, "growth should queue without changing the visible squad immediately");
+
+  const first = advanceAllyReinforcements(queued, 0);
+  const firstReinforcement = first.allies.find((ally) => ally.id === base.nextId);
+  assert(first.allies.length === 2 && first.pendingAllyAdds === 1, "the first update should spawn exactly one reinforcement");
+  assert(firstReinforcement && Math.abs(firstReinforcement.x - first.playerX) <= ALLY_COLLISION_RADIUS, "the reinforcement should emerge at the squad center before being pushed outward");
+
+  const tooSoon = advanceAllyReinforcements(first, ALLY_SPAWN_INTERVAL_SECONDS - 0.001);
+  assert(tooSoon.allies.length === 2, "the next reinforcement should wait for the spawn interval");
+  const completed = advanceAllyReinforcements(tooSoon, 0.001);
+  assert(completed.allies.length === 3 && completed.pendingAllyAdds === 0, "one reinforcement should spawn when the interval completes");
+  assert(completed.allies.find((ally) => ally.id === firstReinforcement.id).pushX !== firstReinforcement.pushX, "the next center spawn should push the previous reinforcement outward");
+}
+
+function testScheduledResizeUsesPendingTargetAndCancelsGrowthFirst() {
+  const base = setSquadSize(createInitialState(), 4);
+  const growing = scheduleSquadSize(base, 10);
+  const expanded = scheduleSquadSize(growing, 12);
+  assert(expanded.allies.length === 4 && expanded.pendingAllyAdds === 8, "later growth should apply to the effective queued size");
+  const reduced = scheduleSquadSize(expanded, 6);
+  assert(reduced.allies.length === 4 && reduced.pendingAllyAdds === 2, "reduction should cancel pending additions before removing live allies");
+  const shrunk = scheduleSquadSize(reduced, 2);
+  assert(shrunk.allies.length === 2 && shrunk.pendingAllyAdds === 0, "further reduction should remove live allies after cancelling the queue");
 }
 
 function testAlliesFallAtTrackEdgesAndCleanTargetedProjectiles() {
@@ -697,6 +760,10 @@ export function runTests() {
     testAlliesReceiveVariedDeterministicWander,
     testAllyWanderMovesLaterallyWithoutChangingRow,
     testAlliesTrendBackTowardSquadCenter,
+    testFormationKeepsFrontToBackDepthCompact,
+    testCohesionReturnsPushOffsetsTowardCenter,
+    testReinforcementsSpawnOneAtATimeFromCenter,
+    testScheduledResizeUsesPendingTargetAndCancelsGrowthFirst,
     testAlliesFallAtTrackEdgesAndCleanTargetedProjectiles,
     testOverlappingAlliesPushApartWithoutBeingRemoved,
     testExactAllyOverlapResolvesDeterministically,
