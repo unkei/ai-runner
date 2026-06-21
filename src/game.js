@@ -1,8 +1,10 @@
 import {
+  GATE_LOOKAHEAD_DISTANCE,
   PLAYER_Y,
   TRACK_MAX_X,
   TRACK_MIN_X,
   movePlayer,
+  projectCourseY,
   projectGateY,
   projectWorldPoint,
   resetState,
@@ -23,6 +25,7 @@ let state = resetState();
 let lastFrame = performance.now();
 let pointerActive = false;
 const heldDirections = new Set();
+const ROAD_BAND_INTERVAL = 18;
 
 function updateKeyboardInput() {
   const leftHeld = heldDirections.has("left");
@@ -101,16 +104,23 @@ function drawTrack() {
   context.lineWidth = 8;
   context.stroke();
 
-  const scroll = (state.distance * 0.9) % 150;
-  for (let y = -120 + scroll; y < canvas.height + 120; y += 150) {
-    const depth = y / canvas.height;
+  const firstBandDistance = (Math.floor(state.distance / ROAD_BAND_INTERVAL) + 1) * ROAD_BAND_INTERVAL;
+  for (
+    let worldDistance = firstBandDistance;
+    worldDistance <= state.distance + GATE_LOOKAHEAD_DISTANCE;
+    worldDistance += ROAD_BAND_INTERVAL
+  ) {
+    const projectedY = projectCourseY(worldDistance, state.distance);
+    const y = worldYToCanvas(projectedY);
+    const depth = Math.max(0, Math.min(1, y / canvas.height));
     const half = canvas.width * (0.18 + depth * 0.3);
+    const bandHeight = 18 + depth * 28;
     context.fillStyle = "rgba(193, 221, 230, 0.32)";
     context.beginPath();
-    context.moveTo(canvas.width / 2 - half * 0.74, y + 46);
-    context.lineTo(canvas.width / 2 + half * 0.74, y + 46);
-    context.lineTo(canvas.width / 2 + half, y + 92);
-    context.lineTo(canvas.width / 2 - half, y + 92);
+    context.moveTo(canvas.width / 2 - half * 0.74, y);
+    context.lineTo(canvas.width / 2 + half * 0.74, y);
+    context.lineTo(canvas.width / 2 + half, y + bandHeight);
+    context.lineTo(canvas.width / 2 - half, y + bandHeight);
     context.closePath();
     context.fill();
   }
@@ -171,10 +181,13 @@ function drawBubble(x, y, value, fill) {
   context.fillText(String(value), x, y - 22);
 }
 
-function drawStickFigure(x, y, scale, fill, stroke = "rgba(15,23,42,0.14)") {
+function drawStickFigure(x, y, scale, fill, stroke = "rgba(15,23,42,0.14)", gaitPhase = 0) {
   const head = 7.2 * scale;
   const body = 17 * scale;
   const leg = 13 * scale;
+  const gait = Math.sin(gaitPhase);
+  const armSwing = gait * 5 * scale;
+  const legSwing = gait * 4.5 * scale;
 
   context.strokeStyle = stroke;
   context.lineWidth = Math.max(2, 3 * scale);
@@ -194,12 +207,14 @@ function drawStickFigure(x, y, scale, fill, stroke = "rgba(15,23,42,0.14)") {
   context.beginPath();
   context.moveTo(x, y + head);
   context.lineTo(x, y + body);
-  context.moveTo(x - 9 * scale, y + 11 * scale);
-  context.lineTo(x + 9 * scale, y + 14 * scale);
+  context.moveTo(x, y + 11 * scale);
+  context.lineTo(x - 9 * scale, y + 14 * scale + armSwing);
+  context.moveTo(x, y + 11 * scale);
+  context.lineTo(x + 9 * scale, y + 14 * scale - armSwing);
   context.moveTo(x, y + body);
-  context.lineTo(x - 7 * scale, y + body + leg);
+  context.lineTo(x - 7 * scale + legSwing, y + body + leg - Math.max(0, gait) * 2.5 * scale);
   context.moveTo(x, y + body);
-  context.lineTo(x + 7 * scale, y + body + leg);
+  context.lineTo(x + 7 * scale - legSwing, y + body + leg + Math.min(0, gait) * 2.5 * scale);
   context.stroke();
 }
 
@@ -221,7 +236,7 @@ function drawSquad() {
   const allies = [...state.allies].sort((a, b) => a.y - b.y || a.id - b.id);
   for (const ally of allies) {
     const point = worldToCanvas(ally.x, ally.y);
-    drawStickFigure(point.x, point.y, point.scale * 0.82, "#38c9f5", "#075985");
+    drawStickFigure(point.x, point.y, point.scale * 0.82, "#38c9f5", "#075985", state.elapsed * 9 + ally.id * 1.7);
     drawGun(point, enemiesById.get(ally.targetEnemyId), point.scale * 0.82);
   }
   const center = worldToCanvas(state.playerX, PLAYER_Y);
@@ -240,7 +255,7 @@ function drawEnemies() {
         ? point.scale * 1.5
         : point.scale * 0.88;
     const stroke = enemy.type === "boss" ? "#7f1d1d" : enemy.type === "midboss" ? "#581c87" : "#991b1b";
-    drawStickFigure(point.x, point.y, scale, color, stroke);
+    drawStickFigure(point.x, point.y, scale, color, stroke, state.elapsed * 7.5 + enemy.id * 1.3);
 
     if (enemy.maxHp > 1) {
       drawBubble(point.x, point.y - 22 * scale, `${enemy.hp}/${enemy.maxHp}`, "#be123c");
