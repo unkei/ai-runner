@@ -108,9 +108,13 @@ function formationOffset(index, count) {
   };
 }
 
-function wanderProfile(id, turn) {
+function wanderProfile(id, turn, centerOffset = 0) {
   const seed = (Math.imul(id + 17, 1103515245) + Math.imul(turn + 31, 12345)) >>> 0;
-  const direction = (seed & 1) === 0 ? -1 : 1;
+  const randomDirection = (seed & 1) === 0 ? -1 : 1;
+  const inwardChance = ((seed >>> 24) & 255) / 255;
+  const direction = Math.abs(centerOffset) >= 0.05 && inwardChance < 0.8
+    ? -Math.sign(centerOffset)
+    : randomDirection;
   const speedUnit = ((seed >>> 8) & 255) / 255;
   const durationUnit = ((seed >>> 16) & 255) / 255;
   return {
@@ -250,15 +254,21 @@ export function applyGateOperation(squadSize, gate) {
 }
 
 export function chooseGatePair(random = Math.random) {
-  const first = random() < 0.6
-    ? { operation: "+", value: 5 + Math.floor(random() * 11) }
+  const positiveOperation = random();
+  const positiveValue = random();
+  const negativeOperation = random();
+  const negativeValue = random();
+  const positive = positiveOperation < 0.6
+    ? { operation: "+", value: 5 + Math.floor(positiveValue * 11) }
     : { operation: "x", value: 2 };
-  const second = random() < 0.54
-    ? { operation: "-", value: 3 + Math.floor(random() * 8) }
-    : { operation: "+", value: 3 + Math.floor(random() * 8) };
+  const negative = negativeOperation < 0.75
+    ? { operation: "-", value: 3 + Math.floor(negativeValue * 8) }
+    : { operation: "/", value: 2 };
+  const positiveOnLeft = random() < 0.5;
+  const [left, right] = positiveOnLeft ? [positive, negative] : [negative, positive];
   return [
-    { ...first, side: "left", x: 0.31 },
-    { ...second, side: "right", x: 0.69 }
+    { ...left, side: "left", x: 0.31 },
+    { ...right, side: "right", x: 0.69 }
   ];
 }
 
@@ -325,21 +335,21 @@ export function spawnEnemyWave(state, x = 0.5, type = "grunt", count) {
   if (state.status !== "running") return state;
   const stage = currentStage(state.distance);
   const isHeavy = type === "boss" || type === "midboss";
-  const enemyCount = isHeavy ? 1 : clampInteger(count ?? 6 + stage * 2, 1, 18);
+  const enemyCount = isHeavy ? 1 : clampInteger(count ?? 10 + stage * 2, 1, 30);
   const waveId = state.nextId;
   const enemies = [];
 
   for (let index = 0; index < enemyCount; index += 1) {
-    const columns = Math.min(6, enemyCount);
+    const columns = Math.min(8, enemyCount);
     const column = index % columns;
     const row = Math.floor(index / columns);
     const rowStart = row * columns;
     const rowCount = Math.min(columns, enemyCount - rowStart);
-    const offsetX = (column - (rowCount - 1) / 2) * 0.065;
+    const offsetX = (column - (rowCount - 1) / 2) * 0.055;
     enemies.push(createEnemy(state, x + offsetX, type, {
       id: state.nextId + index,
       waveId,
-      y: (type === "boss" ? -0.16 : type === "midboss" ? -0.13 : -0.08) - row * 0.045
+      y: (type === "boss" ? -0.16 : type === "midboss" ? -0.13 : -0.08) - row * 0.038
     }));
   }
 
@@ -667,7 +677,8 @@ export function advanceAllyWander(state, deltaSeconds) {
     while (remaining > Number.EPSILON && !fell) {
       if (wanderCooldown <= Number.EPSILON) {
         wanderTurn += 1;
-        ({ wanderVelocity, wanderCooldown } = wanderProfile(ally.id, wanderTurn));
+        const centerOffset = ally.formationX + wanderX + (ally.pushX ?? 0);
+        ({ wanderVelocity, wanderCooldown } = wanderProfile(ally.id, wanderTurn, centerOffset));
       }
       const step = Math.min(remaining, wanderCooldown);
       wanderX += wanderVelocity * step;
