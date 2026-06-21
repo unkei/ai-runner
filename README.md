@@ -5,12 +5,14 @@ A lightweight browser game prototype for a crowd-clash runner.
 ## Gameplay
 
 - Move freely left and right with `ArrowLeft`/`ArrowRight`, `A`/`D`, drag/touch, or the on-screen buttons.
-- Every blue stickman independently finds a nearby enemy and automatically fires a reusable gun; each bullet locks its direction when fired and continues straight instead of homing toward a moving target.
+- Every blue stickman independently finds a nearby enemy and automatically fires a reusable gun with a one-second cooldown; each bullet locks its direction when fired and continues straight instead of homing toward a moving target.
+- Blue stickmen wander independently with animated walking poses. A stickman that wanders beyond a track edge falls from the squad.
 - Every enemy stickman independently chooses an ally, moves, and attacks. Enemy projectiles damage only the ally they hit.
 - Large waves of 8–18 enemies form multiple rows across the front and advance from the far end of the track at an increased cadence.
 - Every fourth enemy wave adds a purple midboss that takes multiple shots to defeat and displays its remaining HP.
 - When an enemy and ally stickman collide directly, that matched pair disappears.
 - Gates are fixed to positions on the course and approach only through forward player progress; each pair applies a selected `+`, `-`, `x`, `*`, or `/` squad operation when crossed.
+- Road bands and gate labels share one world-distance projection, so their forward scrolling stays synchronized.
 - Later stages introduce archers that independently aim and fire at allies.
 - The final stretch introduces a large multi-hit boss, but direct contact still removes the boss and the single ally it touches.
 - The run ends when squad size reaches `0`; Restart starts a fresh run.
