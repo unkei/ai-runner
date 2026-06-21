@@ -10,7 +10,7 @@ export const ENEMY_BASE_SPEED = 0.15;
 export const ENEMY_SPAWN_INTERVAL_SECONDS = 1.45;
 export const GATE_SPAWN_INTERVAL_SECONDS = 3.25;
 export const GATE_LOOKAHEAD_DISTANCE = 96;
-export const ALLY_FIRE_INTERVAL = 0.72;
+export const ALLY_FIRE_INTERVAL = 1;
 export const ALLY_FIRE_RANGE = 1.2;
 export const ALLY_BULLET_SPEED = 1.35;
 export const ALLY_BULLET_LIFETIME = 1.6;
@@ -105,6 +105,17 @@ function formationOffset(index, count) {
   };
 }
 
+function wanderProfile(id, turn) {
+  const seed = (Math.imul(id + 17, 1103515245) + Math.imul(turn + 31, 12345)) >>> 0;
+  const direction = (seed & 1) === 0 ? -1 : 1;
+  const speedUnit = ((seed >>> 8) & 255) / 255;
+  const durationUnit = ((seed >>> 16) & 255) / 255;
+  return {
+    wanderVelocity: direction * (0.035 + speedUnit * 0.055),
+    wanderCooldown: 0.45 + durationUnit * 0.85
+  };
+}
+
 export function reflowAllies(allies, playerX = INITIAL_PLAYER_X) {
   const ordered = [...allies].sort((a, b) => a.id - b.id);
   return ordered.map((ally, index) => {
@@ -113,13 +124,14 @@ export function reflowAllies(allies, playerX = INITIAL_PLAYER_X) {
       ...ally,
       formationX: offset.x,
       formationY: offset.y,
-      x: clampPlayerX(playerX + offset.x),
+      x: clampPlayerX(playerX + offset.x + (ally.wanderX ?? 0)),
       y: PLAYER_Y + offset.y
     };
   });
 }
 
 export function createAlly(id, index = 0) {
+  const wander = wanderProfile(id, 0);
   return {
     id,
     x: INITIAL_PLAYER_X,
@@ -130,7 +142,10 @@ export function createAlly(id, index = 0) {
     maxHp: 1,
     targetEnemyId: null,
     shotsFired: 0,
-    fireCooldown: 0.08 + ((id * 29 + index * 17) % 67) / 100
+    fireCooldown: 0.08 + ((id * 29 + index * 17) % 83) / 100,
+    wanderX: 0,
+    wanderTurn: 0,
+    ...wander
   };
 }
 
@@ -255,6 +270,10 @@ export function createGatePair(state, random = Math.random) {
 }
 
 export function projectGateY(worldDistance, playerDistance) {
+  return projectCourseY(worldDistance, playerDistance);
+}
+
+export function projectCourseY(worldDistance, playerDistance) {
   const relativeDistance = worldDistance - playerDistance;
   const progress = 1 - relativeDistance / GATE_LOOKAHEAD_DISTANCE;
   return -0.08 + clamp(progress, 0, 1) * (PLAYER_Y + 0.08);
@@ -397,7 +416,7 @@ export function resolveAllyFiring(state) {
       ...ally,
       targetEnemyId: target.id,
       shotsFired,
-      fireCooldown: 0.52 + ((ally.id * 37 + shotsFired * 53) % 47) / 100
+      fireCooldown: ALLY_FIRE_INTERVAL
     };
   });
   return { ...state, allies, allyBullets: bullets, nextId };
@@ -628,6 +647,47 @@ export function resolveGateContacts(state) {
   return { ...nextState, gates: remainingGates };
 }
 
+export function advanceAllyWander(state, deltaSeconds) {
+  if (state.status !== "running" || state.allies.length === 0 || deltaSeconds <= 0) return state;
+  const survivors = [];
+
+  for (const ally of state.allies) {
+    let remaining = deltaSeconds;
+    let wanderX = ally.wanderX ?? 0;
+    let wanderTurn = ally.wanderTurn ?? 0;
+    let wanderVelocity = ally.wanderVelocity ?? wanderProfile(ally.id, wanderTurn).wanderVelocity;
+    let wanderCooldown = ally.wanderCooldown ?? wanderProfile(ally.id, wanderTurn).wanderCooldown;
+    let fell = false;
+
+    while (remaining > Number.EPSILON && !fell) {
+      if (wanderCooldown <= Number.EPSILON) {
+        wanderTurn += 1;
+        ({ wanderVelocity, wanderCooldown } = wanderProfile(ally.id, wanderTurn));
+      }
+      const step = Math.min(remaining, wanderCooldown);
+      wanderX += wanderVelocity * step;
+      wanderCooldown -= step;
+      remaining -= step;
+      const rawX = state.playerX + ally.formationX + wanderX;
+      fell = rawX < TRACK_MIN_X || rawX > TRACK_MAX_X;
+    }
+
+    if (!fell) {
+      survivors.push({ ...ally, wanderX, wanderTurn, wanderVelocity, wanderCooldown });
+    }
+  }
+
+  const allies = reflowAllies(survivors, state.playerX);
+  const allyIds = new Set(allies.map((ally) => ally.id));
+  return {
+    ...state,
+    allies,
+    squadSize: allies.length,
+    enemyProjectiles: state.enemyProjectiles.filter((projectile) => allyIds.has(projectile.targetAllyId)),
+    status: allies.length === 0 ? "game-over" : state.status
+  };
+}
+
 export function tickFoundation(state, deltaSeconds) {
   if (state.status !== "running") return state;
   const elapsed = state.elapsed + deltaSeconds;
@@ -638,12 +698,12 @@ export function tickFoundation(state, deltaSeconds) {
 
 function moveWorldObjects(state, deltaSeconds) {
   const moved = withPlayerX(state, state.playerX + state.inputX * PLAYER_SPEED * deltaSeconds);
-  return {
+  return advanceAllyWander({
     ...moved,
     allies: moved.allies.map((ally) => ({ ...ally, fireCooldown: ally.fireCooldown - deltaSeconds })),
     enemies: moved.enemies.map((enemy) => ({ ...enemy, attackCooldown: enemy.attackCooldown - deltaSeconds })),
     gates: moved.gates
-  };
+  }, deltaSeconds);
 }
 
 export function tickGame(state, deltaSeconds, random = Math.random) {

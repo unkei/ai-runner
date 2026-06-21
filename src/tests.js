@@ -8,6 +8,7 @@ import {
   STAGE_DISTANCE,
   TRACK_MAX_X,
   TRACK_MIN_X,
+  advanceAllyWander,
   applyGateOperation,
   clampPlayerX,
   clampSquadSize,
@@ -16,6 +17,7 @@ import {
   currentStage,
   moveEnemiesIndependently,
   movePlayer,
+  projectCourseY,
   projectWorldPoint,
   projectGateY,
   resolveAllyFiring,
@@ -251,7 +253,7 @@ function testAlliesAcquireTargetsAndFireWithoutBeingConsumed() {
   assert(fired.allyBullets.every((bullet) => !("targetEnemyId" in bullet)), "fired bullets should not retain a homing target");
 }
 
-function testAllyFireTimingsStayStaggered() {
+function testAllyFireTimingsStartStaggeredAndResetToOneSecond() {
   let state = createInitialState();
   assert(new Set(state.allies.map((ally) => ally.fireCooldown)).size > 4, "initial firing times should be broadly staggered");
   state = {
@@ -262,7 +264,68 @@ function testAllyFireTimingsStayStaggered() {
   };
   const fired = resolveAllyFiring(state);
   assert(fired.allies.every((ally) => ally.shotsFired === 1), "each firing ally should track its shot count");
-  assert(new Set(fired.allies.map((ally) => ally.fireCooldown)).size > 4, "repeat firing times should remain staggered");
+  assert(fired.allies.every((ally) => ally.fireCooldown === 1), "every fired ally should receive a one-second cooldown");
+  const stillCooling = resolveAllyFiring({
+    ...fired,
+    allies: fired.allies.map((ally) => ({ ...ally, fireCooldown: 0.001 }))
+  });
+  assert(stillCooling.allyBullets.length === fired.allyBullets.length, "an ally should not fire again before one second elapses");
+  const ready = resolveAllyFiring({
+    ...stillCooling,
+    allies: stillCooling.allies.map((ally) => ({ ...ally, fireCooldown: 0 }))
+  });
+  assert(ready.allyBullets.length === fired.allyBullets.length * 2, "an ally should be ready after its one-second cooldown");
+}
+
+function testAlliesReceiveVariedDeterministicWander() {
+  const first = createInitialState();
+  const second = createInitialState();
+  const profiles = first.allies.map((ally) => `${ally.wanderVelocity}:${ally.wanderCooldown}`);
+  assert(new Set(profiles).size > 4, "initial allies should receive varied wander profiles");
+  assert(
+    JSON.stringify(profiles) === JSON.stringify(second.allies.map((ally) => `${ally.wanderVelocity}:${ally.wanderCooldown}`)),
+    "wander profiles should be deterministic"
+  );
+}
+
+function testAllyWanderMovesLaterallyWithoutChangingRow() {
+  let state = setSquadSize(createInitialState(), 1);
+  const ally = { ...state.allies[0], wanderVelocity: 0.08, wanderCooldown: 10 };
+  state = { ...state, allies: [ally] };
+  const moved = advanceAllyWander(state, 0.5);
+  assert(Math.abs(moved.allies[0].x - (ally.x + 0.04)) < 1e-12, "wander should move an ally laterally");
+  assert(moved.allies[0].y === ally.y, "wander should preserve the ally formation row");
+}
+
+function testAlliesFallAtTrackEdgesAndCleanTargetedProjectiles() {
+  let state = setSquadSize(createInitialState(), 2);
+  const falling = {
+    ...state.allies[0],
+    formationX: 0,
+    wanderX: TRACK_MAX_X - state.playerX - 0.005,
+    wanderVelocity: 0.1,
+    wanderCooldown: 10
+  };
+  const survivor = { ...state.allies[1], formationX: 0, wanderX: 0, wanderVelocity: 0, wanderCooldown: 10 };
+  state = {
+    ...state,
+    allies: [falling, survivor],
+    enemyProjectiles: [{ id: 90, targetAllyId: falling.id }]
+  };
+  const moved = advanceAllyWander(state, 0.1);
+  assert(moved.allies.length === 1 && moved.allies[0].id === survivor.id, "an ally crossing a track edge should fall");
+  assert(moved.enemyProjectiles.length === 0, "projectiles targeting a fallen ally should be removed");
+  const gameOver = advanceAllyWander({ ...moved, allies: [{ ...moved.allies[0], formationX: 0, wanderX: TRACK_MIN_X - moved.playerX + 0.005, wanderVelocity: -0.1, wanderCooldown: 10 }] }, 0.1);
+  assert(gameOver.status === "game-over" && gameOver.allies.length === 0, "the final ally falling should end the run");
+}
+
+function testRoadMarkersShareGateProjection() {
+  const worldDistance = 76;
+  const playerDistance = 22;
+  assert(
+    projectCourseY(worldDistance, playerDistance) === projectGateY(worldDistance, playerDistance),
+    "road markers and gates should use the same course projection"
+  );
 }
 
 function testOneAllyCanDefeatMultipleEnemiesSequentially() {
@@ -496,7 +559,11 @@ export function runTests() {
     testMidbossTakesMultipleHitsAndScoresOnce,
     testEnemiesChooseAndMoveTowardDifferentAllies,
     testAlliesAcquireTargetsAndFireWithoutBeingConsumed,
-    testAllyFireTimingsStayStaggered,
+    testAllyFireTimingsStartStaggeredAndResetToOneSecond,
+    testAlliesReceiveVariedDeterministicWander,
+    testAllyWanderMovesLaterallyWithoutChangingRow,
+    testAlliesFallAtTrackEdgesAndCleanTargetedProjectiles,
+    testRoadMarkersShareGateProjection,
     testOneAllyCanDefeatMultipleEnemiesSequentially,
     testBulletKeepsLaunchDirectionAfterTargetMoves,
     testProjectedBulletPositionsStayCollinear,
