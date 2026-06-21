@@ -21,6 +21,11 @@ export const BOSS_STAGE = 4;
 export const MIDBOSS_WAVE_INTERVAL = 4;
 export const STAGE_DISTANCE = 260;
 export const CONTACT_RADIUS = 0.038;
+const PERSPECTIVE_BASE = 0.32;
+const PERSPECTIVE_Y_FACTOR = 0.86;
+const PROJECTED_TRACK_WIDTH_FACTOR = 0.86;
+const PROJECTED_Y_OFFSET = 0.05;
+const PROJECTED_Y_FACTOR = 0.9;
 
 export function clamp(value, min, max) {
   const numericValue = Number(value);
@@ -40,6 +45,25 @@ export function clampSquadSize(size) {
 
 export function clampPlayerX(x) {
   return clamp(x, TRACK_MIN_X, TRACK_MAX_X);
+}
+
+export function projectWorldPoint(x, y) {
+  const perspective = PERSPECTIVE_BASE + y * PERSPECTIVE_Y_FACTOR;
+  const trackPosition = (x - TRACK_MIN_X) / (TRACK_MAX_X - TRACK_MIN_X);
+  return {
+    x: 0.5 + (trackPosition - 0.5) * perspective * PROJECTED_TRACK_WIDTH_FACTOR,
+    y: PROJECTED_Y_OFFSET + y * PROJECTED_Y_FACTOR
+  };
+}
+
+export function unprojectWorldPoint(x, y) {
+  const worldY = (y - PROJECTED_Y_OFFSET) / PROJECTED_Y_FACTOR;
+  const perspective = Math.max(0.01, PERSPECTIVE_BASE + worldY * PERSPECTIVE_Y_FACTOR);
+  const trackPosition = 0.5 + (x - 0.5) / (perspective * PROJECTED_TRACK_WIDTH_FACTOR);
+  return {
+    x: TRACK_MIN_X + trackPosition * (TRACK_MAX_X - TRACK_MIN_X),
+    y: worldY
+  };
 }
 
 export function currentStage(distance) {
@@ -327,18 +351,26 @@ export function moveEnemiesIndependently(state, deltaSeconds) {
 }
 
 function createAllyBullet(id, ally, enemy) {
+  const sourceY = ally.y - 0.012;
   const dx = enemy.x - ally.x;
-  const dy = enemy.y - (ally.y - 0.012);
+  const dy = enemy.y - sourceY;
   const distance = Math.hypot(dx, dy);
   const directionX = distance > Number.EPSILON ? dx / distance : 0;
   const directionY = distance > Number.EPSILON ? dy / distance : -1;
+  const source = projectWorldPoint(ally.x, sourceY);
+  const target = projectWorldPoint(enemy.x, enemy.y);
+  const travelTime = Math.max(distance / ALLY_BULLET_SPEED, Number.EPSILON);
   return {
     id,
     sourceAllyId: ally.id,
     x: ally.x,
-    y: ally.y - 0.012,
+    y: sourceY,
     velocityX: directionX * ALLY_BULLET_SPEED,
     velocityY: directionY * ALLY_BULLET_SPEED,
+    projectedX: source.x,
+    projectedY: source.y,
+    projectedVelocityX: (target.x - source.x) / travelTime,
+    projectedVelocityY: (target.y - source.y) / travelTime,
     damage: 1,
     remainingLifetime: ALLY_BULLET_LIFETIME
   };
@@ -445,10 +477,15 @@ export function resolveAllyProjectiles(state, deltaSeconds) {
   const movedBullets = [];
 
   for (const bullet of state.allyBullets) {
+    const projectedX = bullet.projectedX + bullet.projectedVelocityX * deltaSeconds;
+    const projectedY = bullet.projectedY + bullet.projectedVelocityY * deltaSeconds;
+    const position = unprojectWorldPoint(projectedX, projectedY);
     const nextBullet = {
       ...bullet,
-      x: bullet.x + bullet.velocityX * deltaSeconds,
-      y: bullet.y + bullet.velocityY * deltaSeconds,
+      x: position.x,
+      y: position.y,
+      projectedX,
+      projectedY,
       remainingLifetime: bullet.remainingLifetime - deltaSeconds
     };
     let firstHit = null;

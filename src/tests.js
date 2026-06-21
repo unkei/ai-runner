@@ -16,6 +16,7 @@ import {
   currentStage,
   moveEnemiesIndependently,
   movePlayer,
+  projectWorldPoint,
   projectGateY,
   resolveAllyFiring,
   resolveAllyProjectiles,
@@ -43,7 +44,22 @@ function uniqueIds(entities) {
 }
 
 function straightBullet(id, x, y, velocityX = 0, velocityY = -1) {
-  return { id, sourceAllyId: 1, x, y, velocityX, velocityY, damage: 1, remainingLifetime: 2 };
+  const start = projectWorldPoint(x, y);
+  const end = projectWorldPoint(x + velocityX, y + velocityY);
+  return {
+    id,
+    sourceAllyId: 1,
+    x,
+    y,
+    velocityX,
+    velocityY,
+    projectedX: start.x,
+    projectedY: start.y,
+    projectedVelocityX: end.x - start.x,
+    projectedVelocityY: end.y - start.y,
+    damage: 1,
+    remainingLifetime: 2
+  };
 }
 
 function testInitialStateCreatesIndependentAllies() {
@@ -231,7 +247,7 @@ function testAlliesAcquireTargetsAndFireWithoutBeingConsumed() {
   assert(fired.allyBullets.length === 2, "each ready ally should fire its own bullet");
   assert(fired.allies.length === 2, "shooting should not consume allies");
   assert(fired.allies.every((ally) => ally.targetEnemyId !== null), "each shooter should retain a target id");
-  assert(fired.allyBullets.every((bullet) => Number.isFinite(bullet.velocityX) && bullet.velocityY < 0), "each bullet should capture a launch velocity");
+  assert(fired.allyBullets.every((bullet) => Number.isFinite(bullet.projectedVelocityX) && bullet.projectedVelocityY < 0), "each bullet should capture a projected launch velocity");
   assert(fired.allyBullets.every((bullet) => !("targetEnemyId" in bullet)), "fired bullets should not retain a homing target");
 }
 
@@ -277,9 +293,28 @@ function testBulletKeepsLaunchDirectionAfterTargetMoves() {
   const launched = state.allyBullets[0];
   state = resolveAllyProjectiles({ ...state, enemies: [{ ...enemy, x: 0.75 }] }, 0.1);
   const moved = state.allyBullets[0];
-  assert(moved.x === launched.x + launched.velocityX * 0.1, "moving target should not bend bullet x velocity");
-  assert(moved.y === launched.y + launched.velocityY * 0.1, "moving target should not bend bullet y velocity");
-  assert(moved.velocityX === launched.velocityX && moved.velocityY === launched.velocityY, "launch velocity should remain immutable");
+  assert(moved.projectedX === launched.projectedX + launched.projectedVelocityX * 0.1, "moving target should not bend projected bullet x velocity");
+  assert(moved.projectedY === launched.projectedY + launched.projectedVelocityY * 0.1, "moving target should not bend projected bullet y velocity");
+  assert(
+    moved.projectedVelocityX === launched.projectedVelocityX && moved.projectedVelocityY === launched.projectedVelocityY,
+    "projected launch velocity should remain immutable"
+  );
+}
+
+function testProjectedBulletPositionsStayCollinear() {
+  const bullet = straightBullet(40, 0.3, 0.8, 0.25, -1);
+  const base = { ...createInitialState(), enemies: [], allyBullets: [bullet] };
+  const first = resolveAllyProjectiles(base, 0.1).allyBullets[0];
+  const second = resolveAllyProjectiles({ ...base, allyBullets: [first] }, 0.1).allyBullets[0];
+  const firstDeltaX = first.projectedX - bullet.projectedX;
+  const firstDeltaY = first.projectedY - bullet.projectedY;
+  const secondDeltaX = second.projectedX - bullet.projectedX;
+  const secondDeltaY = second.projectedY - bullet.projectedY;
+  const crossProduct = firstDeltaX * secondDeltaY - firstDeltaY * secondDeltaX;
+  assert(Math.abs(crossProduct) < 1e-12, "projected bullet samples should remain on one screen-space line");
+  const roundTrip = projectWorldPoint(second.x, second.y);
+  assert(Math.abs(roundTrip.x - second.projectedX) < 1e-12, "inverse projection should preserve bullet screen x");
+  assert(Math.abs(roundTrip.y - second.projectedY) < 1e-12, "inverse projection should preserve bullet screen y");
 }
 
 function testBulletPersistsAfterOriginalTargetDisappears() {
@@ -290,7 +325,7 @@ function testBulletPersistsAfterOriginalTargetDisappears() {
   };
   const resolved = resolveAllyProjectiles(state, 0.1);
   assert(resolved.allyBullets.length === 1, "bullet should continue after its original target disappears");
-  assert(resolved.allyBullets[0].y === 0.4, "orphaned bullet should continue along its launch direction");
+  assert(Math.abs(resolved.allyBullets[0].y - 0.4) < 1e-12, "orphaned bullet should continue along its launch direction");
 }
 
 function testSweptBulletHitsFirstEnemyOnStraightPath() {
@@ -464,6 +499,7 @@ export function runTests() {
     testAllyFireTimingsStayStaggered,
     testOneAllyCanDefeatMultipleEnemiesSequentially,
     testBulletKeepsLaunchDirectionAfterTargetMoves,
+    testProjectedBulletPositionsStayCollinear,
     testBulletPersistsAfterOriginalTargetDisappears,
     testSweptBulletHitsFirstEnemyOnStraightPath,
     testEqualDistanceBulletHitUsesEnemyId,
