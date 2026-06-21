@@ -23,6 +23,9 @@ export const MIDBOSS_WAVE_INTERVAL = 4;
 export const STAGE_DISTANCE = 260;
 export const CONTACT_RADIUS = 0.038;
 export const ALLY_COLLISION_RADIUS = 0.022;
+export const ALLY_SPAWN_INTERVAL_SECONDS = 0.12;
+export const ALLY_PUSH_X_RETURN_SPEED = 0.07;
+export const ALLY_PUSH_Y_RETURN_SPEED = 0.16;
 const ALLY_COLLISION_PASSES = 4;
 const PERSPECTIVE_BASE = 0.32;
 const PERSPECTIVE_Y_FACTOR = 0.86;
@@ -99,12 +102,13 @@ function nearestEntity(source, candidates) {
 
 function formationOffset(index, count) {
   const columns = Math.max(1, Math.ceil(Math.sqrt(Math.max(1, count) * 1.45)));
+  const rows = Math.ceil(count / columns);
   const row = Math.floor(index / columns);
   const column = index % columns;
   const rowCount = Math.min(columns, count - row * columns);
   return {
     x: (column - (rowCount - 1) / 2) * 0.035 + ((row % 2) - 0.5) * 0.01,
-    y: -row * 0.027
+    y: (row - (rows - 1) / 2) * 0.02
   };
 }
 
@@ -112,7 +116,7 @@ function wanderProfile(id, turn, centerOffset = 0) {
   const seed = (Math.imul(id + 17, 1103515245) + Math.imul(turn + 31, 12345)) >>> 0;
   const randomDirection = (seed & 1) === 0 ? -1 : 1;
   const inwardChance = ((seed >>> 24) & 255) / 255;
-  const direction = Math.abs(centerOffset) >= 0.05 && inwardChance < 0.8
+  const direction = Math.abs(centerOffset) >= 0.025 && inwardChance < 0.99
     ? -Math.sign(centerOffset)
     : randomDirection;
   const speedUnit = ((seed >>> 8) & 255) / 255;
@@ -179,6 +183,8 @@ export function createInitialState() {
     elapsed: 0,
     stage: 1,
     nextId: INITIAL_SQUAD_SIZE + 1,
+    pendingAllyAdds: 0,
+    allySpawnCooldown: 0,
     enemySpawnCooldown: 0.7,
     gateSpawnCooldown: 1.5,
     bossSpawned: false,
@@ -240,6 +246,36 @@ export function setSquadSize(state, size) {
     allies,
     squadSize: allies.length,
     nextId,
+    pendingAllyAdds: 0,
+    allySpawnCooldown: 0,
+    status: allies.length === 0 ? "game-over" : state.status
+  };
+}
+
+export function scheduleSquadSize(state, size) {
+  const targetSize = clampSquadSize(size);
+  let allies = [...state.allies].sort((a, b) => a.id - b.id);
+  const currentPending = Math.max(0, Math.trunc(state.pendingAllyAdds ?? 0));
+  const effectiveSize = allies.length + currentPending;
+  let pendingAllyAdds = currentPending;
+
+  if (targetSize >= effectiveSize) {
+    pendingAllyAdds += targetSize - effectiveSize;
+  } else {
+    const reduction = effectiveSize - targetSize;
+    const cancelledPending = Math.min(pendingAllyAdds, reduction);
+    pendingAllyAdds -= cancelledPending;
+    const removeAllies = reduction - cancelledPending;
+    if (removeAllies > 0) allies = allies.slice(0, Math.max(0, allies.length - removeAllies));
+  }
+
+  allies = reflowAllies(allies, state.playerX);
+  return {
+    ...state,
+    allies,
+    squadSize: allies.length,
+    pendingAllyAdds,
+    allySpawnCooldown: pendingAllyAdds > 0 ? Math.max(0, state.allySpawnCooldown ?? 0) : 0,
     status: allies.length === 0 ? "game-over" : state.status
   };
 }
@@ -654,7 +690,8 @@ export function resolveGateContacts(state) {
     if (gates[0].worldDistance <= state.distance) {
       const selectedSide = state.playerX <= 0.5 ? "left" : "right";
       const selectedGate = gates.find((gate) => gate.side === selectedSide) ?? gates[0];
-      nextState = setSquadSize(nextState, applyGateOperation(nextState.allies.length, selectedGate));
+      const effectiveSize = nextState.allies.length + (nextState.pendingAllyAdds ?? 0);
+      nextState = scheduleSquadSize(nextState, applyGateOperation(effectiveSize, selectedGate));
     } else {
       remainingGates.push(...gates);
     }
@@ -662,11 +699,61 @@ export function resolveGateContacts(state) {
   return { ...nextState, gates: remainingGates };
 }
 
+function approachZero(value, maxChange) {
+  if (Math.abs(value) <= maxChange) return 0;
+  return value - Math.sign(value) * maxChange;
+}
+
+function applyAllyCohesion(ally, deltaSeconds) {
+  return {
+    ...ally,
+    pushX: approachZero(ally.pushX ?? 0, ALLY_PUSH_X_RETURN_SPEED * deltaSeconds),
+    pushY: approachZero(ally.pushY ?? 0, ALLY_PUSH_Y_RETURN_SPEED * deltaSeconds)
+  };
+}
+
+function createCenterReinforcement(state) {
+  const index = state.allies.length;
+  const offset = formationOffset(index, index + 1);
+  return {
+    ...createAlly(state.nextId, index),
+    pushX: -offset.x,
+    pushY: -offset.y
+  };
+}
+
+export function advanceAllyReinforcements(state, deltaSeconds) {
+  const pending = Math.max(0, Math.trunc(state.pendingAllyAdds ?? 0));
+  if (state.status !== "running" || pending === 0 || deltaSeconds < 0) return state;
+  let nextState = {
+    ...state,
+    allySpawnCooldown: (state.allySpawnCooldown ?? 0) - deltaSeconds
+  };
+
+  while (nextState.pendingAllyAdds > 0 && nextState.allySpawnCooldown <= Number.EPSILON) {
+    const reinforcement = createCenterReinforcement(nextState);
+    nextState = resolveAllyContacts({
+      ...nextState,
+      allies: reflowAllies([...nextState.allies, reinforcement], nextState.playerX),
+      squadSize: nextState.allies.length + 1,
+      nextId: nextState.nextId + 1,
+      pendingAllyAdds: nextState.pendingAllyAdds - 1,
+      allySpawnCooldown: nextState.allySpawnCooldown + ALLY_SPAWN_INTERVAL_SECONDS
+    });
+  }
+
+  return {
+    ...nextState,
+    allySpawnCooldown: nextState.pendingAllyAdds > 0 ? nextState.allySpawnCooldown : 0
+  };
+}
+
 export function advanceAllyWander(state, deltaSeconds) {
   if (state.status !== "running" || state.allies.length === 0 || deltaSeconds <= 0) return state;
   const survivors = [];
 
-  for (const ally of state.allies) {
+  for (const originalAlly of state.allies) {
+    const ally = applyAllyCohesion(originalAlly, deltaSeconds);
     let remaining = deltaSeconds;
     let wanderX = ally.wanderX ?? 0;
     let wanderTurn = ally.wanderTurn ?? 0;
@@ -764,11 +851,12 @@ export function tickFoundation(state, deltaSeconds) {
 
 function moveWorldObjects(state, deltaSeconds) {
   const moved = withPlayerX(state, state.playerX + state.inputX * PLAYER_SPEED * deltaSeconds);
+  const reinforced = advanceAllyReinforcements(moved, deltaSeconds);
   return advanceAllyWander({
-    ...moved,
-    allies: moved.allies.map((ally) => ({ ...ally, fireCooldown: ally.fireCooldown - deltaSeconds })),
-    enemies: moved.enemies.map((enemy) => ({ ...enemy, attackCooldown: enemy.attackCooldown - deltaSeconds })),
-    gates: moved.gates
+    ...reinforced,
+    allies: reinforced.allies.map((ally) => ({ ...ally, fireCooldown: ally.fireCooldown - deltaSeconds })),
+    enemies: reinforced.enemies.map((enemy) => ({ ...enemy, attackCooldown: enemy.attackCooldown - deltaSeconds })),
+    gates: reinforced.gates
   }, deltaSeconds);
 }
 
