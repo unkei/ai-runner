@@ -1,5 +1,9 @@
 import {
+  ALLY_BULLET_LIFETIME,
+  ALLY_BULLET_SPEED,
+  ALLY_COLLISION_RADIUS,
   BOSS_STAGE,
+  COURSE_SPEED,
   GATE_LOOKAHEAD_DISTANCE,
   INITIAL_PLAYER_X,
   INITIAL_SQUAD_SIZE,
@@ -21,6 +25,7 @@ import {
   projectWorldPoint,
   projectGateY,
   resolveAllyFiring,
+  resolveAllyContacts,
   resolveAllyProjectiles,
   resolveCombatantContacts,
   resolveEnemyFiring,
@@ -107,8 +112,8 @@ function testSetSquadSizeCreatesAndRemovesEntities() {
 
 function testFoundationTickScoresDistanceAndStage() {
   const state = tickFoundation(createInitialState(), 1);
-  assert(state.distance === 24, "one second should advance distance");
-  assert(state.score === 24, "score should follow floored distance");
+  assert(state.distance === COURSE_SPEED && COURSE_SPEED === 16, "one second should advance distance at the slower course speed");
+  assert(state.score === COURSE_SPEED, "score should follow floored distance");
   assert(currentStage(STAGE_DISTANCE) === 2, "stage should increase at stage distance");
 }
 
@@ -317,6 +322,85 @@ function testAlliesFallAtTrackEdgesAndCleanTargetedProjectiles() {
   assert(moved.enemyProjectiles.length === 0, "projectiles targeting a fallen ally should be removed");
   const gameOver = advanceAllyWander({ ...moved, allies: [{ ...moved.allies[0], formationX: 0, wanderX: TRACK_MIN_X - moved.playerX + 0.005, wanderVelocity: -0.1, wanderCooldown: 10 }] }, 0.1);
   assert(gameOver.status === "game-over" && gameOver.allies.length === 0, "the final ally falling should end the run");
+}
+
+function testOverlappingAlliesPushApartWithoutBeingRemoved() {
+  let state = setSquadSize(createInitialState(), 2);
+  state = {
+    ...state,
+    allies: state.allies.map((ally) => ({
+      ...ally,
+      formationX: 0,
+      formationY: 0,
+      wanderX: 0,
+      pushX: 0.5 - state.playerX - ally.formationX,
+      pushY: -ally.formationY,
+      x: 0.5,
+      y: PLAYER_Y
+    }))
+  };
+  const initialPushes = new Map(state.allies.map((ally) => [ally.id, { x: ally.pushX, y: ally.pushY }]));
+  const resolved = resolveAllyContacts(state);
+  const [first, second] = resolved.allies;
+  const firstInitial = initialPushes.get(first.id);
+  const secondInitial = initialPushes.get(second.id);
+  assert(resolved.allies.length === 2, "ally contact should not remove either ally");
+  assert(Math.hypot(second.x - first.x, second.y - first.y) >= ALLY_COLLISION_RADIUS * 2 - 1e-12, "overlapping allies should separate to the collision diameter");
+  assert(
+    Math.abs((first.pushX - firstInitial.x) + (second.pushX - secondInitial.x)) < 1e-12 &&
+      Math.abs((first.pushY - firstInitial.y) + (second.pushY - secondInitial.y)) < 1e-12,
+    "allies should receive equal and opposite pushes"
+  );
+}
+
+function testExactAllyOverlapResolvesDeterministically() {
+  let state = setSquadSize(createInitialState(), 2);
+  state = {
+    ...state,
+    allies: state.allies.map((ally) => ({
+      ...ally,
+      wanderX: 0,
+      pushX: 0.5 - state.playerX - ally.formationX,
+      pushY: -ally.formationY,
+      x: 0.5,
+      y: PLAYER_Y
+    }))
+  };
+  const first = resolveAllyContacts(state);
+  const second = resolveAllyContacts({ ...state, allies: [...state.allies].reverse() });
+  assert(JSON.stringify(first.allies) === JSON.stringify(second.allies), "exact overlap should resolve identically regardless of input order");
+}
+
+function testAllyPushCanCauseEdgeFallAndProjectileCleanup() {
+  let state = setSquadSize(createInitialState(), 2);
+  const edgeX = TRACK_MAX_X - ALLY_COLLISION_RADIUS * 0.5;
+  state = {
+    ...state,
+    allies: state.allies.map((ally) => ({
+      ...ally,
+      wanderX: 0,
+      pushX: edgeX - state.playerX - ally.formationX,
+      pushY: -ally.formationY,
+      x: edgeX,
+      y: PLAYER_Y
+    })),
+    enemyProjectiles: [{ id: 90, targetAllyId: state.allies[1].id }]
+  };
+  const resolved = resolveAllyContacts(state);
+  assert(resolved.allies.length === 1, "an ally pushed across the track edge should fall");
+  assert(resolved.enemyProjectiles.length === 0, "projectiles targeting a collision-fallen ally should be removed");
+}
+
+function testAllyBulletsUseHalfSpeedWithPreservedRange() {
+  let state = setSquadSize(createInitialState(), 1);
+  const ally = { ...state.allies[0], fireCooldown: 0 };
+  const enemy = { ...createEnemy(state, ally.x), id: 70, x: ally.x, y: 0.3 };
+  state = resolveAllyFiring({ ...state, allies: [ally], enemies: [enemy], nextId: 100 });
+  const bullet = state.allyBullets[0];
+  assert(ALLY_BULLET_SPEED === 0.675, "ally bullet speed should be half the previous value");
+  assert(Math.abs(Math.hypot(bullet.velocityX, bullet.velocityY) - ALLY_BULLET_SPEED) < 1e-12, "fired bullets should use the half-speed constant");
+  assert(bullet.remainingLifetime === ALLY_BULLET_LIFETIME && ALLY_BULLET_LIFETIME === 3.2, "bullet lifetime should double to preserve travel range");
+  assert(Math.abs(ALLY_BULLET_SPEED * ALLY_BULLET_LIFETIME - 2.16) < 1e-12, "maximum bullet travel range should remain unchanged");
 }
 
 function testRoadMarkersShareGateProjection() {
@@ -563,6 +647,10 @@ export function runTests() {
     testAlliesReceiveVariedDeterministicWander,
     testAllyWanderMovesLaterallyWithoutChangingRow,
     testAlliesFallAtTrackEdgesAndCleanTargetedProjectiles,
+    testOverlappingAlliesPushApartWithoutBeingRemoved,
+    testExactAllyOverlapResolvesDeterministically,
+    testAllyPushCanCauseEdgeFallAndProjectileCleanup,
+    testAllyBulletsUseHalfSpeedWithPreservedRange,
     testRoadMarkersShareGateProjection,
     testOneAllyCanDefeatMultipleEnemiesSequentially,
     testBulletKeepsLaunchDirectionAfterTargetMoves,
