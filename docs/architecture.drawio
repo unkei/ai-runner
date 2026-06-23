@@ -220,11 +220,11 @@
         </mxCell>
 
         <mxCell id="dm_enemy" value="&lt;b&gt;Enemy&lt;/b&gt;&lt;br&gt;&lt;font size=&quot;1&quot;&gt;id · waveId · type&lt;br&gt;grunt | archer | midboss | boss&lt;br&gt;x · y · hp · maxHp&lt;br&gt;targetAllyId&lt;br&gt;moveSpeed · attackRange&lt;br&gt;attackCooldown&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d4bcdd;strokeColor=#9673a6;fontSize=11;arcSize=12;" vertex="1" parent="1">
-          <mxGeometry x="425" y="1130" width="210" height="100" as="geometry" />
+          <mxGeometry x="650" y="1130" width="210" height="100" as="geometry" />
         </mxCell>
 
         <mxCell id="dm_abullet" value="&lt;b&gt;AllyBullet&lt;/b&gt;&lt;br&gt;&lt;font size=&quot;1&quot;&gt;id · sourceAllyId&lt;br&gt;x · y (world)&lt;br&gt;velocityX · velocityY&lt;br&gt;projectedX · projectedY&lt;br&gt;projectedVelX · projectedVelY&lt;br&gt;damage · remainingLifetime&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d4bcdd;strokeColor=#9673a6;fontSize=11;arcSize=12;" vertex="1" parent="1">
-          <mxGeometry x="720" y="1130" width="210" height="100" as="geometry" />
+          <mxGeometry x="390" y="1130" width="210" height="100" as="geometry" />
         </mxCell>
 
         <mxCell id="dm_eproj" value="&lt;b&gt;EnemyProjectile&lt;/b&gt;&lt;br&gt;&lt;font size=&quot;1&quot;&gt;id · sourceEnemyId&lt;br&gt;targetAllyId&lt;br&gt;x · y · speed · damage&lt;br&gt;&lt;i&gt;homing toward target&lt;/i&gt;&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d4bcdd;strokeColor=#9673a6;fontSize=11;arcSize=12;" vertex="1" parent="1">
@@ -245,28 +245,18 @@
           </mxGeometry>
         </mxCell>
         <mxCell id="c_state_enemy" value="enemies: 0..*" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#9673a6;strokeWidth=1.5;endArrow=open;endFill=0;fontSize=10;labelBackgroundColor=#ffffff;exitX=0.35;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="dm_state" target="dm_enemy">
-          <mxGeometry x="-0.6" y="-20" relative="1" as="geometry">
+          <mxGeometry x="-0.15" y="-20" relative="1" as="geometry">
             <Array as="points">
               <mxPoint x="791" y="1110" />
-              <mxPoint x="530" y="1110" />
+              <mxPoint x="755" y="1110" />
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="c_state_ab" value="allyBullets: 0..*" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#9673a6;strokeWidth=1.5;endArrow=open;endFill=0;fontSize=10;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="dm_state" target="dm_abullet">
-          <mxGeometry x="0.03" y="-20" relative="1" as="geometry">
-            <Array as="points">
-              <mxPoint x="825" y="1110" />
-              <mxPoint x="825" y="1110" />
-            </Array>
-          </mxGeometry>
+        <mxCell id="c_state_ab" value="shots: 0..*" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#9673a6;strokeWidth=1.5;endArrow=open;endFill=0;fontSize=10;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="dm_ally" target="dm_abullet">
+          <mxGeometry y="-10" relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="c_state_ep" value="enemyProjectiles: 0..*" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#9673a6;strokeWidth=1.5;endArrow=open;endFill=0;fontSize=10;labelBackgroundColor=#ffffff;exitX=0.65;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="dm_state" target="dm_eproj">
-          <mxGeometry x="0.55" y="-20" relative="1" as="geometry">
-            <Array as="points">
-              <mxPoint x="860" y="1110" />
-              <mxPoint x="1120" y="1110" />
-            </Array>
-          </mxGeometry>
+        <mxCell id="c_state_ep" value="projectiles: 0..*" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#9673a6;strokeWidth=1.5;endArrow=open;endFill=0;fontSize=10;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="dm_enemy" target="dm_eproj">
+          <mxGeometry y="-10" relative="1" as="geometry" />
         </mxCell>
         <mxCell id="c_state_gate" value="gates: 0..*" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#9673a6;strokeWidth=1.5;endArrow=open;endFill=0;fontSize=10;labelBackgroundColor=#ffffff;exitX=0.82;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="dm_state" target="dm_gate">
           <mxGeometry x="0.84" y="-20" relative="1" as="geometry">
